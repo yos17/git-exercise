@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { SASConnection, SASConnectionFactory } from '../connection/sasConnection';
+import { IOMacroDebugger, MacroStatement } from './iomMacroDebugger';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -50,7 +51,7 @@ interface MacroContext {
 /**
  * SAS Runtime - Manages SAS debugging session
  * Handles DATA step debugging via SAS debugger commands
- * and macro debugging via MLOGIC/MPRINT/SYMBOLGEN parsing
+ * and macro debugging via IOM LanguageService (step-through execution)
  */
 export class SASRuntime extends EventEmitter {
     private static BREAKPOINT_ID = 1;
@@ -83,8 +84,113 @@ export class SASRuntime extends EventEmitter {
     private dataStepStack: DataStepContext[] = [];
     private macroStack: MacroContext[] = [];
 
+    // IOM Macro Debugger for step-through macro execution
+    private macroDebugger: IOMacroDebugger;
+    private currentMacroStatement: MacroStatement | null = null;
+
     // Last exception
     private lastException: { id: string; description: string; message: string; type: string } | null = null;
+
+    constructor() {
+        super();
+
+        // Initialize IOM macro debugger
+        this.macroDebugger = new IOMacroDebugger();
+        this.setupMacroDebuggerEvents();
+    }
+
+    /**
+     * Set up event handlers for IOM macro debugger
+     */
+    private setupMacroDebuggerEvents(): void {
+        this.macroDebugger.on('stopOnEntry', (stmt: MacroStatement) => {
+            this.currentMacroStatement = stmt;
+            this.currentLine = stmt.line;
+            this.inMacro = true;
+            this.isPaused = true;
+            this.emit('stopOnEntry');
+        });
+
+        this.macroDebugger.on('stopOnStep', (stmt: MacroStatement) => {
+            this.currentMacroStatement = stmt;
+            this.currentLine = stmt.line;
+            this.isPaused = true;
+            this.emit('stopOnStep');
+        });
+
+        this.macroDebugger.on('stopOnBreakpoint', (stmt: MacroStatement) => {
+            this.currentMacroStatement = stmt;
+            this.currentLine = stmt.line;
+            this.isPaused = true;
+            this.emit('stopOnBreakpoint');
+        });
+
+        this.macroDebugger.on('beforeExecute', (stmt: MacroStatement) => {
+            this.emit('output', `Executing: ${stmt.text}`, 'console');
+        });
+
+        this.macroDebugger.on('afterExecute', (stmt: MacroStatement, result: { log: string }) => {
+            // Update macro variables from execution result
+            this.updateMacroVarsFromDebugger();
+        });
+
+        this.macroDebugger.on('output', (text: string, category: string) => {
+            this.emit('output', text, category);
+        });
+
+        this.macroDebugger.on('error', (stmt: MacroStatement, error: Error) => {
+            this.lastException = {
+                id: 'MACRO_ERROR',
+                description: 'Macro execution error',
+                message: error.message,
+                type: 'MacroException'
+            };
+            this.emit('stopOnException', error.message);
+        });
+
+        this.macroDebugger.on('end', () => {
+            this.inMacro = false;
+            if (!this.inDataStep) {
+                this.isRunning = false;
+                this.emit('end');
+            }
+        });
+    }
+
+    /**
+     * Update macro variables from IOM debugger state
+     */
+    private updateMacroVarsFromDebugger(): void {
+        // Get global macro variables
+        const globalVars = this.macroDebugger.getGlobalMacroVars();
+        this.globalMacroVars.clear();
+        for (const [name, value] of globalVars) {
+            this.globalMacroVars.set(name, {
+                name,
+                value,
+                type: 'macro'
+            });
+        }
+
+        // Get local macro variables
+        const localVars = this.macroDebugger.getLocalMacroVars();
+        this.localMacroVars.clear();
+        for (const [name, value] of localVars) {
+            this.localMacroVars.set(name, {
+                name,
+                value,
+                type: 'macro'
+            });
+        }
+
+        // Update macro stack
+        const callStack = this.macroDebugger.getCallStack();
+        this.macroStack = callStack.map(frame => ({
+            name: frame.name,
+            line: frame.line,
+            localVars: new Map()
+        }));
+    }
 
     /**
      * Initialize the runtime with a connection profile
@@ -107,6 +213,20 @@ export class SASRuntime extends EventEmitter {
 
         // Parse the program to identify DATA steps and macros
         this.analyzeProgram();
+
+        // Set up IOM macro debugger if macro debugging enabled
+        if (options.debugMacros && this.connection) {
+            // Set up submit callback for IOM-based macro execution
+            this.macroDebugger.setSubmitCallback(async (code: string) => {
+                const result = await this.connection!.submit(code);
+                return { log: result.log, output: result.output };
+            });
+
+            // Parse macro code for step-through debugging
+            this.macroDebugger.parseSource(content);
+
+            this.emit('output', `Parsed ${this.macroDebugger.getStatements().length} macro statements for IOM debugging`, 'console');
+        }
 
         this.emit('output', `Loaded program: ${filePath}`, 'console');
     }
@@ -147,7 +267,22 @@ export class SASRuntime extends EventEmitter {
         this.isRunning = true;
         this.currentLine = 1;
 
-        // Build the modified program with debugging enabled
+        // Use IOM macro debugger for macro code if enabled
+        if (this.debugOptions.debugMacros && this.hasMacroCode()) {
+            this.emit('output', 'Starting IOM-based macro debugging...', 'console');
+
+            // Set up macro breakpoints from runtime breakpoints
+            const bps = this.breakpoints.get(this.sourceFile) || [];
+            for (const bp of bps) {
+                this.macroDebugger.setBreakpoint(bp.line, undefined, bp.condition);
+            }
+
+            // Start macro debugger
+            await this.macroDebugger.start(stopOnEntry);
+            return;
+        }
+
+        // Build the modified program with debugging enabled (DATA step only)
         const debugProgram = this.buildDebugProgram();
 
         if (stopOnEntry) {
@@ -159,14 +294,25 @@ export class SASRuntime extends EventEmitter {
     }
 
     /**
+     * Check if program contains macro code
+     */
+    private hasMacroCode(): boolean {
+        const macroPattern = /^\s*%macro\s+/im;
+        return macroPattern.test(this.sourceLines.join('\n'));
+    }
+
+    /**
      * Build program with debug options injected
+     * Note: Uses DATA step debugger, not MLOGIC/MPRINT (IOM handles macros)
      */
     private buildDebugProgram(): string {
         let program = '';
 
-        // Add macro debugging options if enabled
-        if (this.debugOptions.debugMacros) {
-            program += 'options mlogic mprint symbolgen;\n';
+        // Don't add MLOGIC/MPRINT - IOM debugger handles macro debugging
+        // Only add if not using IOM macro debugging
+        if (this.debugOptions.debugMacros && !this.hasMacroCode()) {
+            // Fallback to log-based debugging for simple cases
+            program += 'options symbolgen;\n';
         }
 
         // Process each line
@@ -311,10 +457,19 @@ export class SASRuntime extends EventEmitter {
     /**
      * Continue execution
      */
-    continue(): void {
-        if (this.connection && this.isPaused) {
+    async continue(): Promise<void> {
+        if (!this.isPaused) return;
+
+        // If in macro debugging mode via IOM, delegate to macro debugger
+        if (this.inMacro && this.debugOptions.debugMacros) {
             this.isPaused = false;
-            // Send GO command to SAS debugger
+            await this.macroDebugger.continue();
+            return;
+        }
+
+        // For DATA step debugging, use SAS debugger GO command
+        if (this.connection && this.inDataStep) {
+            this.isPaused = false;
             this.sendDebugCommand('GO');
         }
     }
@@ -322,25 +477,54 @@ export class SASRuntime extends EventEmitter {
     /**
      * Step to next statement
      */
-    step(): void {
-        if (this.connection && this.isPaused) {
+    async step(): Promise<void> {
+        if (!this.isPaused) return;
+
+        // If in macro debugging mode via IOM, use macro debugger stepOver
+        if (this.inMacro && this.debugOptions.debugMacros) {
+            await this.macroDebugger.stepOver();
+            return;
+        }
+
+        // For DATA step debugging, use SAS debugger STEP command
+        if (this.connection && this.inDataStep) {
             this.sendDebugCommand('STEP');
         }
     }
 
     /**
-     * Step into (for macros)
+     * Step into (for macros - steps into macro calls)
      */
-    stepIn(): void {
-        this.step(); // SAS debugger treats step in as regular step
+    async stepIn(): Promise<void> {
+        if (!this.isPaused) return;
+
+        // If in macro debugging mode via IOM, use macro debugger stepInto
+        if (this.inMacro && this.debugOptions.debugMacros) {
+            await this.macroDebugger.stepInto();
+            return;
+        }
+
+        // For DATA step, step into treats as regular step
+        // (DATA steps don't have step-into capability)
+        if (this.connection && this.inDataStep) {
+            this.sendDebugCommand('STEP');
+        }
     }
 
     /**
-     * Step out
+     * Step out (exit current macro or DATA step)
      */
-    stepOut(): void {
-        if (this.connection && this.isPaused) {
-            // Jump to end of current DATA step or macro
+    async stepOut(): Promise<void> {
+        if (!this.isPaused) return;
+
+        // If in macro debugging mode via IOM, use macro debugger stepOut
+        if (this.inMacro && this.debugOptions.debugMacros) {
+            await this.macroDebugger.stepOut();
+            return;
+        }
+
+        // For DATA step debugging, jump to end of current step
+        if (this.connection && this.inDataStep) {
             this.sendDebugCommand('GO');
         }
     }
@@ -394,6 +578,11 @@ export class SASRuntime extends EventEmitter {
         }
         bps.push(bp);
 
+        // Also set breakpoint in IOM macro debugger if debugging macros
+        if (this.debugOptions.debugMacros) {
+            this.macroDebugger.setBreakpoint(line, condition);
+        }
+
         this.emit('breakpointValidated', bp);
         return bp;
     }
@@ -402,6 +591,12 @@ export class SASRuntime extends EventEmitter {
      * Clear breakpoints for a file
      */
     clearBreakpoints(file: string): void {
+        // Get existing breakpoints to clear them from macro debugger
+        const existingBps = this.breakpoints.get(file) || [];
+        for (const bp of existingBps) {
+            this.macroDebugger.removeBreakpointByLine(bp.line);
+        }
+
         this.breakpoints.set(file, []);
     }
 
