@@ -57,16 +57,35 @@ export interface SASVariable {
 }
 
 /**
+ * SAS OnDemand for Academics regions
+ */
+export type SODARegion = 'us1' | 'us2' | 'eu1' | 'eu2' | 'ap1';
+
+/**
+ * SODA region server mappings
+ */
+export const SODA_SERVERS: Record<SODARegion, string[]> = {
+    'us1': ['odaws01-usw2.oda.sas.com', 'odaws02-usw2.oda.sas.com'],
+    'us2': ['odaws01-use1.oda.sas.com', 'odaws02-use1.oda.sas.com'],
+    'eu1': ['odaws01-euw1.oda.sas.com', 'odaws02-euw1.oda.sas.com'],
+    'eu2': ['odaws01-euw2.oda.sas.com', 'odaws02-euw2.oda.sas.com'],
+    'ap1': ['odaws01-apse1.oda.sas.com', 'odaws02-apse1.oda.sas.com']
+};
+
+/**
  * Connection profile configuration
  */
 export interface ConnectionProfile {
     name: string;
-    type: 'saspy' | 'iom' | 'viya';
+    type: 'saspy' | 'iom' | 'viya' | 'oda';  // Added 'oda' for SAS OnDemand for Academics
     host?: string;
     port?: number;
     sasPath?: string;
     username?: string;
     authType?: 'password' | 'token' | 'integrated';
+    // SODA-specific fields
+    sodaRegion?: SODARegion;
+    sodaUsername?: string;  // Your SODA email/username
 }
 
 /**
@@ -124,6 +143,8 @@ export class SASConnectionFactory {
                 return new IOMConnection(profile);
             case 'viya':
                 return new ViyaConnection(profile);
+            case 'oda':
+                return new SODAConnection(profile);
             default:
                 throw new Error(`Unknown connection type: ${profile.type}`);
         }
@@ -597,5 +618,239 @@ export class ViyaConnection implements SASConnection {
         );
 
         return { columns, rows };
+    }
+}
+
+/**
+ * SAS OnDemand for Academics (SODA) connection
+ * Uses SASPy with IOM connection to SODA servers
+ * FREE for everyone - great for testing!
+ *
+ * Setup requirements:
+ * 1. Create free account at: https://welcome.oda.sas.com/
+ * 2. Install Java 1.8.0_162 or higher
+ * 3. Install SASPy: pip install saspy
+ * 4. Create ~/.authinfo file with credentials
+ */
+export class SODAConnection implements SASConnection {
+    private profile: ConnectionProfile;
+    private _isConnected: boolean = false;
+    private pythonProcess: any = null;
+
+    constructor(profile: ConnectionProfile) {
+        this.profile = profile;
+    }
+
+    get isConnected(): boolean {
+        return this._isConnected;
+    }
+
+    get connectionType(): string {
+        return 'oda';
+    }
+
+    async connect(): Promise<void> {
+        const config = vscode.workspace.getConfiguration('sasDebugger');
+        const pythonPath = config.get<string>('pythonPath') || 'python';
+
+        // Get SODA region servers
+        const region = this.profile.sodaRegion || 'us1';
+        const servers = SODA_SERVERS[region];
+
+        if (!servers) {
+            throw new Error(`Invalid SODA region: ${region}. Valid: us1, us2, eu1, eu2, ap1`);
+        }
+
+        // Start Python process with SASPy bridge
+        const { spawn } = await import('child_process');
+        const path = await import('path');
+
+        const bridgePath = path.join(__dirname, '..', 'python', 'saspy_bridge.py');
+
+        this.pythonProcess = spawn(pythonPath, [bridgePath], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        // Send SODA connection configuration
+        const connectConfig = JSON.stringify({
+            command: 'connect_oda',
+            config: {
+                region: region,
+                servers: servers,
+                port: 8591,
+                username: this.profile.sodaUsername
+            }
+        });
+
+        const response = await this.sendCommand(connectConfig);
+        const result = JSON.parse(response);
+
+        if (result.status === 'error') {
+            throw new Error(result.message || 'Failed to connect to SODA');
+        }
+
+        this._isConnected = true;
+    }
+
+    async disconnect(): Promise<void> {
+        if (this.pythonProcess) {
+            await this.sendCommand(JSON.stringify({ command: 'disconnect' }));
+            this.pythonProcess.kill();
+            this.pythonProcess = null;
+        }
+        this._isConnected = false;
+    }
+
+    async submit(code: string): Promise<SASExecutionResult> {
+        const response = await this.sendCommand(JSON.stringify({
+            command: 'submit',
+            code: code
+        }));
+
+        return this.parseResponse(response);
+    }
+
+    async submitAsync(code: string): Promise<string> {
+        const response = await this.sendCommand(JSON.stringify({
+            command: 'submit_async',
+            code: code
+        }));
+
+        const result = JSON.parse(response);
+        return result.jobId;
+    }
+
+    async sendDebugCommand(command: string): Promise<string> {
+        const response = await this.sendCommand(JSON.stringify({
+            command: 'debug',
+            debugCommand: command
+        }));
+
+        const result = JSON.parse(response);
+        return result.output || '';
+    }
+
+    async getLibraries(): Promise<SASLibrary[]> {
+        const code = `
+            proc sql noprint;
+                select libname, path, engine, readonly
+                from dictionary.libnames
+                where libname not like 'SAS%';
+            quit;
+        `;
+        const result = await this.submit(code);
+        return this.parseLibraries(result.output);
+    }
+
+    async getDatasets(library: string): Promise<SASDataset[]> {
+        const code = `
+            proc sql noprint;
+                select memname, nobs, nvars, crdate, modate, memlabel
+                from dictionary.tables
+                where libname = '${library.toUpperCase()}';
+            quit;
+        `;
+        const result = await this.submit(code);
+        return this.parseDatasets(library, result.output);
+    }
+
+    async getVariables(library: string, dataset: string): Promise<SASVariable[]> {
+        const code = `
+            proc contents data=${library}.${dataset} out=_vars_ noprint;
+            run;
+        `;
+        await this.submit(code);
+
+        const response = await this.sendCommand(JSON.stringify({
+            command: 'get_variables',
+            library: 'WORK',
+            dataset: '_vars_'
+        }));
+
+        const result = JSON.parse(response);
+        return result.variables || [];
+    }
+
+    async getData(
+        library: string,
+        dataset: string,
+        options?: {
+            where?: string;
+            firstObs?: number;
+            obs?: number;
+            keep?: string[];
+            drop?: string[];
+        }
+    ): Promise<{ columns: SASVariable[]; rows: any[][] }> {
+        const response = await this.sendCommand(JSON.stringify({
+            command: 'get_data',
+            library: library,
+            dataset: dataset,
+            options: options
+        }));
+
+        const result = JSON.parse(response);
+        return {
+            columns: result.columns || [],
+            rows: result.rows || []
+        };
+    }
+
+    private async sendCommand(command: string): Promise<string> {
+        return new Promise((resolve, reject) => {
+            if (!this.pythonProcess) {
+                reject(new Error('Python process not running'));
+                return;
+            }
+
+            let output = '';
+
+            const onData = (data: Buffer) => {
+                output += data.toString();
+                if (output.includes('__END_RESPONSE__')) {
+                    this.pythonProcess.stdout.off('data', onData);
+                    resolve(output.replace('__END_RESPONSE__', '').trim());
+                }
+            };
+
+            this.pythonProcess.stdout.on('data', onData);
+
+            this.pythonProcess.stderr.on('data', (data: Buffer) => {
+                console.error('SODA Connection Error:', data.toString());
+            });
+
+            this.pythonProcess.stdin.write(command + '\n');
+        });
+    }
+
+    private parseResponse(response: string): SASExecutionResult {
+        try {
+            const result = JSON.parse(response);
+            return {
+                log: result.log || '',
+                output: result.output || '',
+                status: result.errors?.length > 0 ? 'error' : 'success',
+                errors: result.errors || [],
+                warnings: result.warnings || []
+            };
+        } catch {
+            return {
+                log: response,
+                output: '',
+                status: 'success',
+                errors: [],
+                warnings: []
+            };
+        }
+    }
+
+    private parseLibraries(output: string): SASLibrary[] {
+        const libraries: SASLibrary[] = [];
+        return libraries;
+    }
+
+    private parseDatasets(library: string, output: string): SASDataset[] {
+        const datasets: SASDataset[] = [];
+        return datasets;
     }
 }

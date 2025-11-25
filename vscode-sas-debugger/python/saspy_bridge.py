@@ -76,6 +76,82 @@ class SASPyBridge:
                 "message": str(e)
             }
 
+    def connect_oda(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Connect to SAS OnDemand for Academics (FREE!)
+
+        Requirements:
+        1. Free SODA account: https://welcome.oda.sas.com/
+        2. Java 1.8.0_162 or higher
+        3. ~/.authinfo file with: oda user YOUR_EMAIL password YOUR_PASSWORD
+
+        Regions:
+        - us1: US West (odaws01-usw2.oda.sas.com)
+        - us2: US East (odaws01-use1.oda.sas.com)
+        - eu1: EU West 1 (odaws01-euw1.oda.sas.com)
+        - eu2: EU West 2 (odaws01-euw2.oda.sas.com)
+        - ap1: Asia Pacific (odaws01-apse1.oda.sas.com)
+        """
+        try:
+            servers = config.get('servers', [])
+            port = config.get('port', 8591)
+            region = config.get('region', 'us1')
+
+            if not servers:
+                return {
+                    "status": "error",
+                    "message": "No SODA servers specified"
+                }
+
+            # Check for authinfo file
+            import os
+            home = os.path.expanduser("~")
+            authinfo_path = os.path.join(home, '.authinfo')
+            if os.name == 'nt':  # Windows
+                authinfo_path = os.path.join(home, '_authinfo')
+
+            if not os.path.exists(authinfo_path):
+                return {
+                    "status": "error",
+                    "message": f"""
+Authentication file not found!
+
+Please create {authinfo_path} with:
+oda user YOUR_SODA_EMAIL password YOUR_SODA_PASSWORD
+
+Get free account at: https://welcome.oda.sas.com/
+"""
+                }
+
+            # Connect to SODA using IOM
+            self.sas = saspy.SASsession(
+                iomhost=servers,
+                iomport=port,
+                authkey='oda',
+                encoding='utf-8'
+            )
+
+            return {
+                "status": "connected",
+                "message": f"Connected to SAS OnDemand for Academics ({region})"
+            }
+
+        except Exception as e:
+            error_msg = str(e)
+
+            # Provide helpful error messages
+            if "encryption" in error_msg.lower():
+                error_msg += "\n\nTip: Ensure Java 1.8.0_162 or higher is installed"
+            elif "auth" in error_msg.lower():
+                error_msg += "\n\nTip: Check your ~/.authinfo file has correct credentials"
+            elif "connect" in error_msg.lower():
+                error_msg += "\n\nTip: Check your SODA region matches your account"
+
+            return {
+                "status": "error",
+                "message": error_msg
+            }
+
     def disconnect(self) -> Dict[str, Any]:
         """Close SAS connection"""
         if self.sas:
@@ -360,6 +436,8 @@ def main():
 
             if cmd_type == 'connect':
                 result = bridge.connect(command.get('config', {}))
+            elif cmd_type == 'connect_oda':
+                result = bridge.connect_oda(command.get('config', {}))
             elif cmd_type == 'disconnect':
                 result = bridge.disconnect()
             elif cmd_type == 'submit':

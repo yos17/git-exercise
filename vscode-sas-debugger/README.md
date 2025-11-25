@@ -36,13 +36,69 @@ A Visual Studio Code extension for debugging SAS DATA steps and macros, with int
   - `saspy` - For SAS connection
   - `pyreadstat` (optional) - For reading local SAS7BDAT files
   - `pandas` (optional) - For data manipulation
+- **Java 1.8.0_162+** - Required for SODA/IOM connections
 
-### SAS Server Requirements
-- **SAS 9.4** with Workspace Server for IOM connections
-- **SAS Viya** for REST API connections
-- **Local SAS** on Windows for direct execution
+### SAS Server Options
 
-## Installation
+| Option | Cost | Best For |
+|--------|------|----------|
+| **SAS OnDemand for Academics (SODA)** | **FREE** | Testing, Learning |
+| SAS Viya Trial | Free 14 days | Viya features |
+| SAS 9.4 Workspace Server | Licensed | Enterprise |
+| Local SAS (Windows) | Licensed | Local development |
+
+## Quick Start with FREE SAS (SODA)
+
+**No license needed!** Use SAS OnDemand for Academics for free:
+
+### Step 1: Create Free SODA Account
+1. Go to [https://welcome.oda.sas.com/](https://welcome.oda.sas.com/)
+2. Sign up for free (works for anyone, not just students)
+3. Note your **region** (shown at top-right after login): US, EU, or Asia Pacific
+
+### Step 2: Install Dependencies
+```bash
+pip install saspy pyreadstat pandas
+```
+
+### Step 3: Create Authentication File
+Create `~/.authinfo` (Linux/Mac) or `C:\Users\YOUR_USER\_authinfo` (Windows):
+```
+oda user YOUR_SODA_EMAIL password YOUR_SODA_PASSWORD
+```
+
+### Step 4: Configure VS Code Extension
+Add to your VS Code settings (Ctrl+,):
+```json
+{
+  "sasDebugger.connectionProfiles": [
+    {
+      "name": "soda-free",
+      "type": "oda",
+      "sodaRegion": "us1",
+      "sodaUsername": "your.email@example.com"
+    }
+  ],
+  "sasDebugger.defaultProfile": "soda-free"
+}
+```
+
+**SODA Regions:**
+| Region | Code | Servers |
+|--------|------|---------|
+| US West | `us1` | odaws01-usw2.oda.sas.com |
+| US East | `us2` | odaws01-use1.oda.sas.com |
+| EU West 1 | `eu1` | odaws01-euw1.oda.sas.com |
+| EU West 2 | `eu2` | odaws01-euw2.oda.sas.com |
+| Asia Pacific | `ap1` | odaws01-apse1.oda.sas.com |
+
+### Step 5: Connect and Run!
+1. Open a `.sas` file
+2. Run command: `SAS: Connect to SAS Server`
+3. Select your SODA profile
+4. Start coding!
+
+## Alternative Installation (Licensed SAS)
 
 1. Install the extension from VS Code Marketplace
 2. Install Python dependencies:
@@ -61,6 +117,12 @@ Configure connection profiles in VS Code settings:
 {
   "sasDebugger.connectionProfiles": [
     {
+      "name": "soda-free",
+      "type": "oda",
+      "sodaRegion": "us1",
+      "sodaUsername": "your.email@example.com"
+    },
+    {
       "name": "local",
       "type": "saspy",
       "sasPath": "/usr/local/SAS/SASFoundation/9.4/sas"
@@ -77,7 +139,7 @@ Configure connection profiles in VS Code settings:
       "host": "viya.example.com"
     }
   ],
-  "sasDebugger.defaultProfile": "local",
+  "sasDebugger.defaultProfile": "soda-free",
   "sasDebugger.pythonPath": "python3"
 }
 ```
