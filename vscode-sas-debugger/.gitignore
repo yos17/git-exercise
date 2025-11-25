@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+.vscode-test/
+*.vsix
+.DS_Store
+*.log
+*.pyc
+__pycache__/
+.env
+.idea/
+*.swp
+*.swo

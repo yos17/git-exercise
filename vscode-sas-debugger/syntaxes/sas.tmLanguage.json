@@ -1,0 +1,166 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "SAS",
+    "scopeName": "source.sas",
+    "fileTypes": ["sas"],
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#macros" },
+        { "include": "#data-step" },
+        { "include": "#procedures" },
+        { "include": "#functions" },
+        { "include": "#keywords" },
+        { "include": "#operators" },
+        { "include": "#numbers" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.block.sas",
+                    "begin": "/\\*",
+                    "end": "\\*/",
+                    "captures": {
+                        "0": { "name": "punctuation.definition.comment.sas" }
+                    }
+                },
+                {
+                    "name": "comment.line.sas",
+                    "match": "^\\s*\\*[^;]*;",
+                    "captures": {
+                        "0": { "name": "punctuation.definition.comment.sas" }
+                    }
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.sas",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "variable.other.macro.sas",
+                            "match": "&+\\w+"
+                        }
+                    ]
+                },
+                {
+                    "name": "string.quoted.single.sas",
+                    "begin": "'",
+                    "end": "'"
+                }
+            ]
+        },
+        "macros": {
+            "patterns": [
+                {
+                    "name": "entity.name.function.macro.sas",
+                    "match": "%(?i)(macro|mend|let|put|global|local|do|end|if|then|else|goto|label|return|sysfunc|eval|sysevalf|str|nrstr|quote|nrquote|bquote|nrbquote|superq|qsysfunc|scan|substr|index|length|compress|upcase|lowcase|left|right|trim|cmpres|qscan|qsubstr|qupcase|qlowcase|qleft|qright|qtrim|qcmpres|include|input|window|display|abort|syscall|copy|list|run)\\b"
+                },
+                {
+                    "name": "variable.other.macro.sas",
+                    "match": "&+\\w+"
+                },
+                {
+                    "name": "keyword.control.macro.sas",
+                    "match": "%\\w+"
+                }
+            ]
+        },
+        "data-step": {
+            "patterns": [
+                {
+                    "name": "keyword.control.datastep.sas",
+                    "match": "\\b(?i)(data|set|merge|update|modify|infile|file|input|put|output|delete|stop|return|link|goto|if|then|else|do|end|while|until|over|leave|continue|select|when|otherwise|array|retain|drop|keep|rename|where|length|format|informat|label|attrib|by|first|last|_n_|_error_|_iorc_|_infile_|_null_|_all_|_numeric_|_character_)\\b"
+                },
+                {
+                    "name": "storage.type.datastep.sas",
+                    "match": "\\b(?i)(run|quit|cards|cards4|datalines|datalines4|parmcards|parmcards4)\\s*;"
+                }
+            ]
+        },
+        "procedures": {
+            "patterns": [
+                {
+                    "name": "keyword.other.proc.sas",
+                    "match": "\\b(?i)(proc)\\s+(\\w+)",
+                    "captures": {
+                        "1": { "name": "keyword.control.proc.sas" },
+                        "2": { "name": "entity.name.function.proc.sas" }
+                    }
+                },
+                {
+                    "name": "entity.name.function.proc.sas",
+                    "match": "\\b(?i)(print|sort|contents|datasets|format|freq|means|summary|univariate|sql|transpose|report|tabulate|sgplot|sgpanel|template|export|import|copy|append|compare|corr|reg|logistic|glm|mixed|npar1way|ttest|anova|factor|cluster|fastclus|varclus|stdize|standard|rank|catalog|cport|cimport|options|printto|pwencode|fontreg|gmap|gplot|gchart|greplay)\\b"
+                }
+            ]
+        },
+        "functions": {
+            "patterns": [
+                {
+                    "name": "support.function.sas",
+                    "match": "\\b(?i)(abs|ceil|floor|int|mod|round|sign|sqrt|exp|log|log10|log2|sin|cos|tan|asin|acos|atan|sinh|cosh|tanh|max|min|sum|mean|std|var|n|nmiss|range|css|cv|uss|skewness|kurtosis|median|ordinal|pctl|largest|smallest|cat|cats|catt|catx|compress|index|indexc|indexw|find|findc|findw|length|lengthc|lengthm|lengthn|left|right|trim|strip|upcase|lowcase|propcase|reverse|repeat|substr|substrn|scan|tranwrd|translate|prxmatch|prxchange|prxparse|prxposn|input|put|date|today|datetime|time|datepart|timepart|mdy|yrdif|intck|intnx|year|month|day|hour|minute|second|weekday|qtr|week|juldate|missing|coalesce|coalescec|ifn|ifc|choose|whichn|whichc|lag|dif|rank|byte|collate|verify|anyalnum|anyalpha|anydigit|anyfirst|anylower|anyupper|notalnum|notalpha|notdigit|notfirst|notlower|notupper|count|countc|countw|call)\\b"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.sas",
+                    "match": "\\b(?i)(and|or|not|eq|ne|gt|lt|ge|le|in|between|contains|like|is|null|missing)\\b"
+                },
+                {
+                    "name": "keyword.other.sas",
+                    "match": "\\b(?i)(options|libname|filename|title|footnote|ods|goptions|axis|legend|pattern|symbol|note|dm|x|endsas|page|skip)\\b"
+                },
+                {
+                    "name": "constant.language.sas",
+                    "match": "\\b(?i)(true|false|yes|no)\\b"
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.assignment.sas",
+                    "match": "="
+                },
+                {
+                    "name": "keyword.operator.comparison.sas",
+                    "match": "(==|^=|~=|<>|<=|>=|<|>)"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.sas",
+                    "match": "(\\+|-|\\*|/|\\*\\*)"
+                },
+                {
+                    "name": "keyword.operator.concatenation.sas",
+                    "match": "\\|\\|"
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.sas",
+                    "match": "\\b\\d+\\.?\\d*([eE][+-]?\\d+)?\\b"
+                },
+                {
+                    "name": "constant.numeric.date.sas",
+                    "match": "'\\d{1,2}[A-Za-z]{3}\\d{2,4}'d"
+                },
+                {
+                    "name": "constant.numeric.time.sas",
+                    "match": "'\\d{1,2}:\\d{2}(:\\d{2})?'t"
+                },
+                {
+                    "name": "constant.numeric.datetime.sas",
+                    "match": "'\\d{1,2}[A-Za-z]{3}\\d{2,4}:\\d{1,2}:\\d{2}(:\\d{2})?'dt"
+                }
+            ]
+        }
+    }
+}
