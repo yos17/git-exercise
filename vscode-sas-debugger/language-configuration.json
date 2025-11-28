@@ -1,37 +1,37 @@
 {
-    "comments": {
-        "lineComment": "*",
-        "blockComment": ["/*", "*/"]
-    },
-    "brackets": [
-        ["{", "}"],
-        ["[", "]"],
-        ["(", ")"]
-    ],
-    "autoClosingPairs": [
-        { "open": "{", "close": "}" },
-        { "open": "[", "close": "]" },
-        { "open": "(", "close": ")" },
-        { "open": "'", "close": "'", "notIn": ["string", "comment"] },
-        { "open": "\"", "close": "\"", "notIn": ["string", "comment"] },
-        { "open": "/*", "close": "*/", "notIn": ["string"] }
-    ],
-    "surroundingPairs": [
-        ["{", "}"],
-        ["[", "]"],
-        ["(", ")"],
-        ["'", "'"],
-        ["\"", "\""]
-    ],
-    "folding": {
-        "markers": {
-            "start": "^\\s*(data|proc|%macro)\\b",
-            "end": "^\\s*(run|quit|%mend)\\s*;"
-        }
-    },
-    "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-    "indentationRules": {
-        "increaseIndentPattern": "^\\s*(data|proc|%macro|do|select|if.*then|else)\\b.*$",
-        "decreaseIndentPattern": "^\\s*(end|run|quit|%mend)\\s*;?\\s*$"
+  "comments": {
+    "lineComment": "*",
+    "blockComment": ["/*", "*/"]
+  },
+  "brackets": [
+    ["(", ")"],
+    ["{", "}"],
+    ["[", "]"]
+  ],
+  "autoClosingPairs": [
+    { "open": "(", "close": ")" },
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "\"", "close": "\"" },
+    { "open": "'", "close": "'" },
+    { "open": "/*", "close": "*/" }
+  ],
+  "surroundingPairs": [
+    ["(", ")"],
+    ["{", "}"],
+    ["[", "]"],
+    ["\"", "\""],
+    ["'", "'"]
+  ],
+  "folding": {
+    "markers": {
+      "start": "(?i)^\\s*(data|proc|%macro)\\b",
+      "end": "(?i)^\\s*(run|quit|%mend)\\s*;"
     }
+  },
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
+  "indentationRules": {
+    "increaseIndentPattern": "(?i)^\\s*(data|proc|%macro|%do|%if.*%then|select)\\b",
+    "decreaseIndentPattern": "(?i)^\\s*(run|quit|%mend|%end|end)\\s*;"
+  }
 }

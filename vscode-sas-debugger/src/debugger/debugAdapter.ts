@@ -1,5 +1,5 @@
 import {
-    LoggingDebugSession,
+    DebugSession,
     InitializedEvent,
     StoppedEvent,
     BreakpointEvent,
@@ -9,44 +9,32 @@ import {
     StackFrame,
     Scope,
     Source,
-    Variable,
     Breakpoint
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
-import { SASRuntime, SASBreakpoint, RuntimeVariable } from './sasRuntime';
+import { SASRuntime, RuntimeVariable } from './sasRuntime';
 import * as path from 'path';
 
-/**
- * Launch request arguments for SAS debugging
- */
-interface SASLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
+interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
     program: string;
-    connectionProfile: string;
-    stopOnEntry: boolean;
-    debugDataSteps: boolean;
-    debugMacros: boolean;
+    connection?: string;
+    debugDataSteps?: boolean;
+    debugMacros?: boolean;
+    stopOnEntry?: boolean;
 }
 
-/**
- * SAS Debug Adapter - Implements the Debug Adapter Protocol for SAS
- * Supports DATA step debugging and macro tracing
- */
-export class SASDebugSession extends LoggingDebugSession {
+export class SASDebugSession extends DebugSession {
     private static THREAD_ID = 1;
     private runtime: SASRuntime;
-    private configurationDone = false;
-    private currentFile: string = '';
-    private sourceLines: string[] = [];
+    private variableHandles = new Map<number, string>();
+    private nextVariableHandle = 1000;
 
     constructor() {
-        super('sas-debug.log');
-
-        this.setDebuggerLinesStartAt1(true);
-        this.setDebuggerColumnsStartAt1(true);
+        super();
 
         this.runtime = new SASRuntime();
 
-        // Runtime events
+        // Set up runtime event handlers
         this.runtime.on('stopOnEntry', () => {
             this.sendEvent(new StoppedEvent('entry', SASDebugSession.THREAD_ID));
         });
@@ -59,15 +47,15 @@ export class SASDebugSession extends LoggingDebugSession {
             this.sendEvent(new StoppedEvent('breakpoint', SASDebugSession.THREAD_ID));
         });
 
-        this.runtime.on('stopOnDataChange', (varName: string) => {
+        this.runtime.on('stopOnDataChange', () => {
             this.sendEvent(new StoppedEvent('data breakpoint', SASDebugSession.THREAD_ID));
         });
 
-        this.runtime.on('stopOnException', (exception: string) => {
-            this.sendEvent(new StoppedEvent('exception', SASDebugSession.THREAD_ID, exception));
+        this.runtime.on('stopOnException', (message: string) => {
+            this.sendEvent(new StoppedEvent('exception', SASDebugSession.THREAD_ID, message));
         });
 
-        this.runtime.on('breakpointValidated', (bp: SASBreakpoint) => {
+        this.runtime.on('breakpointValidated', (bp: any) => {
             this.sendEvent(new BreakpointEvent('changed', {
                 verified: bp.verified,
                 id: bp.id
@@ -75,8 +63,9 @@ export class SASDebugSession extends LoggingDebugSession {
         });
 
         this.runtime.on('output', (text: string, category: string) => {
-            const outputEvent = new OutputEvent(text + '\n', category);
-            this.sendEvent(outputEvent);
+            const outputCategory = category === 'stderr' ? 'stderr' :
+                                   category === 'console' ? 'console' : 'stdout';
+            this.sendEvent(new OutputEvent(text + '\n', outputCategory));
         });
 
         this.runtime.on('end', () => {
@@ -84,9 +73,6 @@ export class SASDebugSession extends LoggingDebugSession {
         });
     }
 
-    /**
-     * Initialize the debug adapter
-     */
     protected initializeRequest(
         response: DebugProtocol.InitializeResponse,
         args: DebugProtocol.InitializeRequestArguments
@@ -102,11 +88,8 @@ export class SASDebugSession extends LoggingDebugSession {
         response.body.supportsCancelRequest = false;
         response.body.supportsBreakpointLocationsRequest = true;
         response.body.supportsStepInTargetsRequest = false;
-        response.body.supportsExceptionFilterOptions = false;
         response.body.supportsExceptionInfoRequest = true;
         response.body.supportsSetVariable = true;
-        response.body.supportsRestartFrame = false;
-        response.body.supportsGotoTargetsRequest = false;
         response.body.supportsConditionalBreakpoints = true;
         response.body.supportsHitConditionalBreakpoints = true;
         response.body.supportsLogPoints = true;
@@ -115,67 +98,57 @@ export class SASDebugSession extends LoggingDebugSession {
         this.sendEvent(new InitializedEvent());
     }
 
-    /**
-     * Configuration done - start debugging
-     */
+    protected async launchRequest(
+        response: DebugProtocol.LaunchResponse,
+        args: LaunchRequestArguments
+    ): Promise<void> {
+        try {
+            // Initialize connection
+            if (args.connection) {
+                await this.runtime.initialize(args.connection);
+            }
+
+            // Load program
+            await this.runtime.loadProgram(args.program, {
+                debugDataSteps: args.debugDataSteps ?? true,
+                debugMacros: args.debugMacros ?? true
+            });
+
+            // Start debugging
+            await this.runtime.start(args.stopOnEntry ?? true);
+
+            this.sendResponse(response);
+        } catch (error) {
+            this.sendErrorResponse(response, {
+                id: 1,
+                format: `Launch failed: ${error}`,
+                showUser: true
+            });
+        }
+    }
+
     protected configurationDoneRequest(
         response: DebugProtocol.ConfigurationDoneResponse,
         args: DebugProtocol.ConfigurationDoneArguments
     ): void {
         super.configurationDoneRequest(response, args);
-        this.configurationDone = true;
     }
 
-    /**
-     * Launch the debugger
-     */
-    protected async launchRequest(
-        response: DebugProtocol.LaunchResponse,
-        args: SASLaunchRequestArguments
-    ): Promise<void> {
-        this.currentFile = args.program;
-
-        try {
-            // Initialize runtime with connection
-            await this.runtime.initialize(args.connectionProfile);
-
-            // Load the SAS program
-            await this.runtime.loadProgram(args.program, {
-                debugDataSteps: args.debugDataSteps,
-                debugMacros: args.debugMacros
-            });
-
-            // Start execution
-            if (args.stopOnEntry) {
-                await this.runtime.start(true);
-            } else {
-                await this.runtime.start(false);
-            }
-
-            this.sendResponse(response);
-        } catch (error) {
-            this.sendErrorResponse(response, 1, `Failed to launch: ${error}`);
-        }
-    }
-
-    /**
-     * Set breakpoints in a source file
-     */
     protected setBreakPointsRequest(
         response: DebugProtocol.SetBreakpointsResponse,
         args: DebugProtocol.SetBreakpointsArguments
     ): void {
-        const sourcePath = args.source.path || '';
-        const clientLines = args.breakpoints || [];
+        const filePath = args.source.path || '';
+        const clientBreakpoints = args.breakpoints || [];
 
         // Clear existing breakpoints for this file
-        this.runtime.clearBreakpoints(sourcePath);
+        this.runtime.clearBreakpoints(filePath);
 
         // Set new breakpoints
-        const breakpoints: DebugProtocol.Breakpoint[] = clientLines.map((bp, index) => {
+        const breakpoints: DebugProtocol.Breakpoint[] = clientBreakpoints.map((bp) => {
             const sasBreakpoint = this.runtime.setBreakpoint(
-                sourcePath,
-                this.convertClientLineToDebugger(bp.line),
+                filePath,
+                bp.line,
                 bp.condition,
                 bp.hitCondition,
                 bp.logMessage
@@ -184,7 +157,7 @@ export class SASDebugSession extends LoggingDebugSession {
             return {
                 id: sasBreakpoint.id,
                 verified: sasBreakpoint.verified,
-                line: this.convertDebuggerLineToClient(sasBreakpoint.line),
+                line: sasBreakpoint.line,
                 source: args.source
             } as DebugProtocol.Breakpoint;
         });
@@ -193,20 +166,17 @@ export class SASDebugSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    /**
-     * Set data breakpoints (watch variables)
-     */
     protected setDataBreakpointsRequest(
         response: DebugProtocol.SetDataBreakpointsResponse,
         args: DebugProtocol.SetDataBreakpointsArguments
     ): void {
         const breakpoints: DebugProtocol.Breakpoint[] = [];
 
-        for (const dataBreakpoint of args.breakpoints) {
-            const bp = this.runtime.setDataBreakpoint(dataBreakpoint.dataId);
+        for (const dbp of args.breakpoints) {
+            const bp = this.runtime.setDataBreakpoint(dbp.dataId);
             breakpoints.push({
-                verified: bp.verified,
-                id: bp.id
+                id: bp.id,
+                verified: bp.verified
             });
         }
 
@@ -214,54 +184,39 @@ export class SASDebugSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    /**
-     * Get threads (SAS is single-threaded)
-     */
     protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
         response.body = {
             threads: [
-                new Thread(SASDebugSession.THREAD_ID, 'SAS Main Thread')
+                new Thread(SASDebugSession.THREAD_ID, 'SAS Session')
             ]
         };
         this.sendResponse(response);
     }
 
-    /**
-     * Get stack trace
-     */
     protected stackTraceRequest(
         response: DebugProtocol.StackTraceResponse,
         args: DebugProtocol.StackTraceArguments
     ): void {
         const startFrame = args.startFrame ?? 0;
-        const maxLevels = args.levels ?? 1000;
+        const maxLevels = args.levels ?? 100;
 
-        const stk = this.runtime.getStackTrace(startFrame, maxLevels);
-
-        const frames: StackFrame[] = stk.frames.map((frame, index) => {
-            const source = new Source(
-                path.basename(frame.file),
-                frame.file
-            );
-
-            return new StackFrame(
-                frame.id,
-                frame.name,
-                source,
-                this.convertDebuggerLineToClient(frame.line)
-            );
-        });
+        const stack = this.runtime.getStackTrace(startFrame, maxLevels);
 
         response.body = {
-            stackFrames: frames,
-            totalFrames: stk.count
+            stackFrames: stack.frames.map((frame) => {
+                return new StackFrame(
+                    frame.id,
+                    frame.name,
+                    new Source(path.basename(frame.file), frame.file),
+                    frame.line
+                );
+            }),
+            totalFrames: stack.count
         };
+
         this.sendResponse(response);
     }
 
-    /**
-     * Get scopes for a stack frame
-     */
     protected scopesRequest(
         response: DebugProtocol.ScopesResponse,
         args: DebugProtocol.ScopesArguments
@@ -269,112 +224,95 @@ export class SASDebugSession extends LoggingDebugSession {
         const scopes: Scope[] = [];
 
         // PDV (Program Data Vector) - DATA step variables
-        scopes.push(new Scope('PDV Variables', 1000, false));
+        const pdvHandle = this.nextVariableHandle++;
+        this.variableHandles.set(pdvHandle, 'pdv');
+        scopes.push(new Scope('PDV (DATA Step Variables)', pdvHandle, false));
 
         // Macro Variables - Global
-        scopes.push(new Scope('Global Macro Variables', 2000, false));
+        const globalMacroHandle = this.nextVariableHandle++;
+        this.variableHandles.set(globalMacroHandle, 'macro_global');
+        scopes.push(new Scope('Global Macro Variables', globalMacroHandle, false));
 
         // Macro Variables - Local
-        scopes.push(new Scope('Local Macro Variables', 3000, false));
+        const localMacroHandle = this.nextVariableHandle++;
+        this.variableHandles.set(localMacroHandle, 'macro_local');
+        scopes.push(new Scope('Local Macro Variables', localMacroHandle, false));
 
         // Automatic Variables
-        scopes.push(new Scope('Automatic Variables', 4000, true));
+        const autoHandle = this.nextVariableHandle++;
+        this.variableHandles.set(autoHandle, 'automatic');
+        scopes.push(new Scope('Automatic Variables', autoHandle, false));
 
         response.body = { scopes };
         this.sendResponse(response);
     }
 
-    /**
-     * Get variables for a scope
-     */
     protected async variablesRequest(
         response: DebugProtocol.VariablesResponse,
         args: DebugProtocol.VariablesArguments
     ): Promise<void> {
-        const variables: Variable[] = [];
+        const scopeType = this.variableHandles.get(args.variablesReference);
+        let variables: RuntimeVariable[] = [];
 
-        try {
-            let runtimeVars: RuntimeVariable[] = [];
-
-            switch (args.variablesReference) {
-                case 1000: // PDV Variables
-                    runtimeVars = await this.runtime.getPDVVariables();
-                    break;
-                case 2000: // Global Macro Variables
-                    runtimeVars = await this.runtime.getGlobalMacroVariables();
-                    break;
-                case 3000: // Local Macro Variables
-                    runtimeVars = await this.runtime.getLocalMacroVariables();
-                    break;
-                case 4000: // Automatic Variables
-                    runtimeVars = await this.runtime.getAutomaticVariables();
-                    break;
-            }
-
-            for (const v of runtimeVars) {
-                variables.push({
-                    name: v.name,
-                    value: v.value,
-                    type: v.type,
-                    variablesReference: 0,
-                    evaluateName: v.name
-                });
-            }
-        } catch (error) {
-            this.sendEvent(new OutputEvent(`Error getting variables: ${error}\n`, 'stderr'));
+        switch (scopeType) {
+            case 'pdv':
+                variables = this.runtime.getPDVVariables();
+                break;
+            case 'macro_global':
+                variables = this.runtime.getGlobalMacroVariables();
+                break;
+            case 'macro_local':
+                variables = this.runtime.getLocalMacroVariables();
+                break;
+            case 'automatic':
+                variables = this.runtime.getAutomaticVariables();
+                break;
         }
 
-        response.body = { variables };
+        response.body = {
+            variables: variables.map((v) => ({
+                name: v.name,
+                value: v.value,
+                type: v.type,
+                variablesReference: 0
+            }))
+        };
+
         this.sendResponse(response);
     }
 
-    /**
-     * Continue execution
-     */
-    protected continueRequest(
+    protected async continueRequest(
         response: DebugProtocol.ContinueResponse,
         args: DebugProtocol.ContinueArguments
-    ): void {
-        this.runtime.continue();
+    ): Promise<void> {
+        await this.runtime.continue();
         this.sendResponse(response);
     }
 
-    /**
-     * Step to next statement
-     */
-    protected nextRequest(
+    protected async nextRequest(
         response: DebugProtocol.NextResponse,
         args: DebugProtocol.NextArguments
-    ): void {
-        this.runtime.step();
+    ): Promise<void> {
+        await this.runtime.step();
         this.sendResponse(response);
     }
 
-    /**
-     * Step into
-     */
-    protected stepInRequest(
+    protected async stepInRequest(
         response: DebugProtocol.StepInResponse,
         args: DebugProtocol.StepInArguments
-    ): void {
-        this.runtime.stepIn();
+    ): Promise<void> {
+        await this.runtime.stepIn();
         this.sendResponse(response);
     }
 
-    /**
-     * Step out
-     */
-    protected stepOutRequest(
+    protected async stepOutRequest(
         response: DebugProtocol.StepOutResponse,
         args: DebugProtocol.StepOutArguments
-    ): void {
-        this.runtime.stepOut();
+    ): Promise<void> {
+        await this.runtime.stepOut();
         this.sendResponse(response);
     }
 
-    /**
-     * Pause execution
-     */
     protected pauseRequest(
         response: DebugProtocol.PauseResponse,
         args: DebugProtocol.PauseArguments
@@ -383,18 +321,23 @@ export class SASDebugSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    /**
-     * Evaluate an expression
-     */
     protected async evaluateRequest(
         response: DebugProtocol.EvaluateResponse,
         args: DebugProtocol.EvaluateArguments
     ): Promise<void> {
+        let result: string;
+
         try {
-            const result = await this.runtime.evaluate(args.expression, args.context);
+            if (args.expression.startsWith('%')) {
+                // Macro variable evaluation
+                result = await this.runtime.evaluateMacroExpression(args.expression);
+            } else {
+                // PDV variable or expression
+                result = await this.runtime.evaluateExpression(args.expression);
+            }
+
             response.body = {
-                result: result.value,
-                type: result.type,
+                result,
                 variablesReference: 0
             };
         } catch (error) {
@@ -403,32 +346,54 @@ export class SASDebugSession extends LoggingDebugSession {
                 variablesReference: 0
             };
         }
+
         this.sendResponse(response);
     }
 
-    /**
-     * Set a variable value
-     */
     protected async setVariableRequest(
         response: DebugProtocol.SetVariableResponse,
         args: DebugProtocol.SetVariableArguments
     ): Promise<void> {
+        const scopeType = this.variableHandles.get(args.variablesReference);
+
         try {
-            const newValue = await this.runtime.setVariable(args.name, args.value);
-            response.body = {
-                value: newValue,
-                variablesReference: 0
-            };
+            let newValue: string;
+
+            if (scopeType === 'macro_global' || scopeType === 'macro_local') {
+                newValue = await this.runtime.setMacroVariable(args.name, args.value);
+            } else {
+                newValue = await this.runtime.setVariable(args.name, args.value);
+            }
+
+            response.body = { value: newValue };
         } catch (error) {
-            this.sendErrorResponse(response, 1, `Cannot set variable: ${error}`);
-            return;
+            response.body = { value: `Error: ${error}` };
         }
+
         this.sendResponse(response);
     }
 
-    /**
-     * Disconnect from debugging
-     */
+    protected exceptionInfoRequest(
+        response: DebugProtocol.ExceptionInfoResponse,
+        args: DebugProtocol.ExceptionInfoArguments
+    ): void {
+        const exception = this.runtime.getLastException();
+
+        if (exception) {
+            response.body = {
+                exceptionId: exception.id,
+                description: exception.description,
+                breakMode: 'always',
+                details: {
+                    message: exception.message,
+                    typeName: exception.type
+                }
+            };
+        }
+
+        this.sendResponse(response);
+    }
+
     protected disconnectRequest(
         response: DebugProtocol.DisconnectResponse,
         args: DebugProtocol.DisconnectArguments
@@ -436,49 +401,7 @@ export class SASDebugSession extends LoggingDebugSession {
         this.runtime.terminate();
         this.sendResponse(response);
     }
-
-    /**
-     * Get exception info
-     */
-    protected exceptionInfoRequest(
-        response: DebugProtocol.ExceptionInfoResponse,
-        args: DebugProtocol.ExceptionInfoArguments
-    ): void {
-        const exception = this.runtime.getLastException();
-        response.body = {
-            exceptionId: exception.id,
-            description: exception.description,
-            breakMode: 'always',
-            details: {
-                message: exception.message,
-                typeName: exception.type
-            }
-        };
-        this.sendResponse(response);
-    }
-
-    /**
-     * Get breakpoint locations for a source range
-     */
-    protected breakpointLocationsRequest(
-        response: DebugProtocol.BreakpointLocationsResponse,
-        args: DebugProtocol.BreakpointLocationsArguments
-    ): void {
-        const locations = this.runtime.getBreakpointLocations(
-            args.source.path || '',
-            args.line,
-            args.endLine
-        );
-
-        response.body = {
-            breakpoints: locations.map(l => ({
-                line: this.convertDebuggerLineToClient(l.line),
-                column: l.column
-            }))
-        };
-        this.sendResponse(response);
-    }
 }
 
-// Run the debug adapter
-SASDebugSession.run(SASDebugSession);
+// Start the debug adapter
+DebugSession.run(SASDebugSession);

@@ -2,12 +2,10 @@
   "compilerOptions": {
     "module": "commonjs",
     "target": "ES2022",
-    "outDir": "dist",
-    "lib": [
-      "ES2022"
-    ],
-    "sourceMap": true,
+    "lib": ["ES2022"],
+    "outDir": "out",
     "rootDir": "src",
+    "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -16,12 +14,6 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "webview-ui"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", ".vscode-test"]
 }

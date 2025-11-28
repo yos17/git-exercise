@@ -1,14 +1,11 @@
-//@ts-check
-
 'use strict';
 
 const path = require('path');
 
-/**@type {import('webpack').Configuration}*/
+/** @type {import('webpack').Configuration} */
 const extensionConfig = {
   target: 'node',
   mode: 'none',
-
   entry: './src/extension.ts',
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -26,25 +23,20 @@ const extensionConfig = {
       {
         test: /\.ts$/,
         exclude: /node_modules/,
-        use: [
-          {
-            loader: 'ts-loader'
-          }
-        ]
+        use: [{ loader: 'ts-loader' }]
       }
     ]
   },
   devtool: 'nosources-source-map',
   infrastructureLogging: {
-    level: "log",
-  },
+    level: 'log'
+  }
 };
 
-/**@type {import('webpack').Configuration}*/
+/** @type {import('webpack').Configuration} */
 const debugAdapterConfig = {
   target: 'node',
   mode: 'none',
-
   entry: './src/debugger/debugAdapter.ts',
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -62,15 +54,11 @@ const debugAdapterConfig = {
       {
         test: /\.ts$/,
         exclude: /node_modules/,
-        use: [
-          {
-            loader: 'ts-loader'
-          }
-        ]
+        use: [{ loader: 'ts-loader' }]
       }
     ]
   },
-  devtool: 'nosources-source-map',
+  devtool: 'nosources-source-map'
 };
 
 module.exports = [extensionConfig, debugAdapterConfig];

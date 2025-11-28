@@ -1,1 +1,0 @@
-export { SASLogOutputChannel } from './logChannel';

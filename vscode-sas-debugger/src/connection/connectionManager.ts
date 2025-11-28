@@ -1,299 +1,324 @@
 import * as vscode from 'vscode';
-import {
-    SASConnection,
-    SASConnectionFactory,
-    SASExecutionResult,
-    SASLibrary,
-    SASDataset,
-    SASVariable,
-    ConnectionProfile
-} from './sasConnection';
-import { SASLogOutputChannel } from '../utils/logChannel';
+import { spawn, ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
+import { OutputManager } from '../utils/outputManager';
 
-/**
- * Manages SAS connections throughout the extension lifecycle
- */
-export class SASConnectionManager {
-    private context: vscode.ExtensionContext;
-    private logChannel: SASLogOutputChannel;
-    private connection: SASConnection | null = null;
-    private currentProfile: string | null = null;
+export interface ConnectionProfile {
+    name?: string;
+    type: 'soda' | 'iom' | 'viya' | 'ssh';
+    host?: string;
+    port?: number;
+    username?: string;
+    region?: string;  // For SODA
+    clientId?: string;  // For Viya
+    clientSecret?: string;
+}
 
-    private readonly _onConnectionChanged = new vscode.EventEmitter<boolean>();
-    public readonly onConnectionChanged = this._onConnectionChanged.event;
+export interface SubmitResult {
+    log: string;
+    output: string;
+    hasErrors: boolean;
+    hasWarnings: boolean;
+}
 
-    constructor(context: vscode.ExtensionContext, logChannel: SASLogOutputChannel) {
-        this.context = context;
-        this.logChannel = logChannel;
+export interface DatasetInfo {
+    libref: string;
+    name: string;
+    rows: number;
+    columns: number;
+    size: number;
+    modified: Date;
+}
+
+export interface LibraryInfo {
+    name: string;
+    path: string;
+    engine: string;
+    datasets: DatasetInfo[];
+}
+
+const SODA_SERVERS: Record<string, string> = {
+    'us': 'odaws01-usw2.oda.sas.com',
+    'eu': 'odaws01-euw1.oda.sas.com',
+    'ap': 'odaws01-apse1.oda.sas.com'
+};
+
+export class SASConnectionManager extends EventEmitter {
+    private pythonProcess: ChildProcess | null = null;
+    private connected: boolean = false;
+    private currentProfile: ConnectionProfile | null = null;
+    private outputManager: OutputManager;
+    private pendingRequests: Map<string, {
+        resolve: (value: any) => void;
+        reject: (error: any) => void;
+    }> = new Map();
+    private requestId: number = 0;
+
+    constructor(outputManager: OutputManager) {
+        super();
+        this.outputManager = outputManager;
     }
 
-    /**
-     * Get whether we're currently connected
-     */
-    get isConnected(): boolean {
-        return this.connection?.isConnected ?? false;
-    }
-
-    /**
-     * Get the current connection
-     */
-    getConnection(): SASConnection | null {
-        return this.connection;
-    }
-
-    /**
-     * Connect to SAS using the specified or default profile
-     */
-    async connect(profileName?: string): Promise<void> {
-        // If already connected, disconnect first
-        if (this.connection?.isConnected) {
+    async connect(profile: ConnectionProfile): Promise<void> {
+        if (this.connected) {
             await this.disconnect();
         }
 
-        const profile = profileName || await this.selectProfile();
-        if (!profile) {
-            throw new Error('No connection profile selected');
-        }
+        this.outputManager.log(`Connecting to SAS (${profile.type})...`);
 
         try {
-            this.logChannel.appendLine(`Connecting to SAS using profile: ${profile}`);
-            this.connection = await SASConnectionFactory.create(profile);
-            await this.connection.connect();
-            this.currentProfile = profile;
+            // Start Python bridge process
+            await this.startPythonBridge();
 
-            this.logChannel.appendLine(`Successfully connected to SAS (${this.connection.connectionType})`);
-            this._onConnectionChanged.fire(true);
+            // Send connection command
+            const connectCmd = this.buildConnectCommand(profile);
+            const result = await this.sendCommand(connectCmd);
 
-            vscode.window.showInformationMessage(`Connected to SAS: ${profile}`);
+            if (result.success) {
+                this.connected = true;
+                this.currentProfile = profile;
+                this.emit('connectionChange', true);
+                this.outputManager.log('Successfully connected to SAS');
+                vscode.window.showInformationMessage('Connected to SAS');
+            } else {
+                throw new Error(result.error || 'Connection failed');
+            }
         } catch (error) {
-            this.logChannel.appendLine(`Connection failed: ${error}`);
-            vscode.window.showErrorMessage(`Failed to connect to SAS: ${error}`);
+            this.outputManager.error(`Connection failed: ${error}`);
             throw error;
         }
     }
 
-    /**
-     * Disconnect from SAS
-     */
     async disconnect(): Promise<void> {
-        if (this.connection) {
-            try {
-                await this.connection.disconnect();
-                this.logChannel.appendLine('Disconnected from SAS');
-            } catch (error) {
-                this.logChannel.appendLine(`Disconnect error: ${error}`);
-            } finally {
-                this.connection = null;
-                this.currentProfile = null;
-                this._onConnectionChanged.fire(false);
-            }
+        if (this.pythonProcess) {
+            await this.sendCommand({ command: 'disconnect' });
+            this.pythonProcess.kill();
+            this.pythonProcess = null;
         }
+        this.connected = false;
+        this.currentProfile = null;
+        this.emit('connectionChange', false);
+        this.outputManager.log('Disconnected from SAS');
     }
 
-    /**
-     * Submit SAS code
-     */
-    async submit(code: string): Promise<SASExecutionResult> {
-        if (!this.connection?.isConnected) {
-            // Try to auto-connect
-            await this.connect();
-        }
+    isConnected(): boolean {
+        return this.connected;
+    }
 
-        if (!this.connection) {
+    getProfile(): ConnectionProfile | null {
+        return this.currentProfile;
+    }
+
+    async submit(code: string): Promise<SubmitResult> {
+        if (!this.connected) {
             throw new Error('Not connected to SAS');
         }
 
-        this.logChannel.appendLine('Submitting SAS code...');
-        const result = await this.connection.submit(code);
+        const result = await this.sendCommand({
+            command: 'submit',
+            code
+        });
 
-        // Log the results
-        if (result.log) {
-            this.logChannel.appendSASLog(result.log);
-        }
-
-        if (result.errors.length > 0) {
-            this.logChannel.appendLine(`Execution completed with ${result.errors.length} error(s)`);
-        } else {
-            this.logChannel.appendLine('Execution completed successfully');
-        }
-
-        return result;
+        return {
+            log: result.log || '',
+            output: result.output || '',
+            hasErrors: result.log?.includes('ERROR:') || false,
+            hasWarnings: result.log?.includes('WARNING:') || false
+        };
     }
 
-    /**
-     * Send a debug command
-     */
-    async sendDebugCommand(command: string): Promise<string> {
-        if (!this.connection?.isConnected) {
+    async getLibraries(): Promise<LibraryInfo[]> {
+        if (!this.connected) {
             throw new Error('Not connected to SAS');
         }
 
-        return await this.connection.sendDebugCommand(command);
+        const result = await this.sendCommand({ command: 'get_libraries' });
+        return result.libraries || [];
     }
 
-    /**
-     * Get list of libraries
-     */
-    async getLibraries(): Promise<SASLibrary[]> {
-        if (!this.connection?.isConnected) {
-            return [];
+    async getDatasets(libref: string): Promise<DatasetInfo[]> {
+        if (!this.connected) {
+            throw new Error('Not connected to SAS');
         }
 
-        return await this.connection.getLibraries();
+        const result = await this.sendCommand({
+            command: 'get_datasets',
+            libref
+        });
+        return result.datasets || [];
     }
 
-    /**
-     * Get datasets in a library
-     */
-    async getDatasets(library: string): Promise<SASDataset[]> {
-        if (!this.connection?.isConnected) {
-            return [];
-        }
-
-        return await this.connection.getDatasets(library);
-    }
-
-    /**
-     * Get variables in a dataset
-     */
-    async getVariables(library: string, dataset: string): Promise<SASVariable[]> {
-        if (!this.connection?.isConnected) {
-            return [];
-        }
-
-        return await this.connection.getVariables(library, dataset);
-    }
-
-    /**
-     * Get data from a dataset
-     */
-    async getData(
-        library: string,
+    async getDatasetData(
+        libref: string,
         dataset: string,
-        options?: {
-            where?: string;
-            firstObs?: number;
-            obs?: number;
-            keep?: string[];
-            drop?: string[];
-        }
-    ): Promise<{ columns: SASVariable[]; rows: any[][] }> {
-        if (!this.connection?.isConnected) {
+        options?: { start?: number; limit?: number; filter?: string }
+    ): Promise<{ columns: any[]; data: any[][]; totalRows: number }> {
+        if (!this.connected) {
             throw new Error('Not connected to SAS');
         }
 
-        return await this.connection.getData(library, dataset, options);
-    }
-
-    /**
-     * Show profile selection QuickPick
-     */
-    private async selectProfile(): Promise<string | undefined> {
-        const config = vscode.workspace.getConfiguration('sasDebugger');
-        const profiles = config.get<ConnectionProfile[]>('connectionProfiles') || [];
-        const defaultProfile = config.get<string>('defaultProfile');
-
-        if (profiles.length === 0) {
-            // Offer to create a profile
-            const create = await vscode.window.showInformationMessage(
-                'No SAS connection profiles configured. Would you like to create one?',
-                'Create Profile',
-                'Use Default'
-            );
-
-            if (create === 'Create Profile') {
-                await this.createProfile();
-                return this.selectProfile();
-            } else if (create === 'Use Default') {
-                return 'default';
-            }
-            return undefined;
-        }
-
-        if (profiles.length === 1) {
-            return profiles[0].name;
-        }
-
-        const items = profiles.map(p => ({
-            label: p.name,
-            description: `${p.type}${p.host ? ' - ' + p.host : ''}`,
-            detail: p.name === defaultProfile ? '(Default)' : undefined
-        }));
-
-        const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Select a SAS connection profile'
+        const result = await this.sendCommand({
+            command: 'get_data',
+            libref,
+            dataset,
+            ...options
         });
 
-        return selected?.label;
+        return {
+            columns: result.columns || [],
+            data: result.data || [],
+            totalRows: result.totalRows || 0
+        };
     }
 
-    /**
-     * Create a new connection profile
-     */
-    private async createProfile(): Promise<void> {
-        const name = await vscode.window.showInputBox({
-            prompt: 'Profile name',
-            value: 'default'
+    async getMacroVariables(): Promise<{ name: string; value: string; scope: string }[]> {
+        if (!this.connected) {
+            return [];
+        }
+
+        const result = await this.sendCommand({ command: 'get_macro_vars' });
+        return result.variables || [];
+    }
+
+    async sendDebugCommand(command: string): Promise<string> {
+        const result = await this.sendCommand({
+            command: 'debug',
+            debugCommand: command
         });
+        return result.output || '';
+    }
 
-        if (!name) return;
+    onConnectionChange(callback: (connected: boolean) => void): void {
+        this.on('connectionChange', callback);
+    }
 
-        const type = await vscode.window.showQuickPick(
-            [
-                { label: 'saspy', description: 'SASPy (Python) - Local or remote SAS' },
-                { label: 'viya', description: 'SAS Viya REST API' },
-                { label: 'iom', description: 'IOM (Java) - SAS 9.4 Workspace' }
-            ],
-            { placeHolder: 'Select connection type' }
-        );
+    private async startPythonBridge(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const config = vscode.workspace.getConfiguration('sasStudioAI');
+            const pythonPath = config.get<string>('python.path') || 'python3';
 
-        if (!type) return;
+            // Get extension path for Python script
+            const extensionPath = vscode.extensions.getExtension('sas-studio-ai.sas-studio-ai')?.extensionPath
+                || __dirname.replace(/[/\\]dist$/, '');
+            const scriptPath = `${extensionPath}/python/sas_bridge.py`;
 
-        const profile: ConnectionProfile = {
-            name,
-            type: type.label as 'saspy' | 'iom' | 'viya'
+            this.pythonProcess = spawn(pythonPath, [scriptPath], {
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+
+            let started = false;
+
+            this.pythonProcess.stdout?.on('data', (data: Buffer) => {
+                const lines = data.toString().split('\n');
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+
+                    try {
+                        const response = JSON.parse(line);
+
+                        if (response.type === 'ready') {
+                            started = true;
+                            resolve();
+                        } else if (response.requestId && this.pendingRequests.has(response.requestId)) {
+                            const pending = this.pendingRequests.get(response.requestId)!;
+                            this.pendingRequests.delete(response.requestId);
+
+                            if (response.error) {
+                                pending.reject(new Error(response.error));
+                            } else {
+                                pending.resolve(response);
+                            }
+                        }
+                    } catch (e) {
+                        // Not JSON, might be regular output
+                        this.outputManager.log(line);
+                    }
+                }
+            });
+
+            this.pythonProcess.stderr?.on('data', (data: Buffer) => {
+                this.outputManager.error(data.toString());
+            });
+
+            this.pythonProcess.on('error', (error) => {
+                if (!started) {
+                    reject(error);
+                }
+            });
+
+            this.pythonProcess.on('exit', (code) => {
+                if (!started) {
+                    reject(new Error(`Python process exited with code ${code}`));
+                }
+                this.connected = false;
+                this.emit('connectionChange', false);
+            });
+
+            // Timeout after 30 seconds
+            setTimeout(() => {
+                if (!started) {
+                    this.pythonProcess?.kill();
+                    reject(new Error('Timeout starting Python bridge'));
+                }
+            }, 30000);
+        });
+    }
+
+    private buildConnectCommand(profile: ConnectionProfile): any {
+        const cmd: any = {
+            command: 'connect',
+            type: profile.type
         };
 
-        if (type.label === 'saspy') {
-            const sasPath = await vscode.window.showInputBox({
-                prompt: 'Path to SAS executable (leave empty for default)',
-                placeHolder: '/usr/local/SAS/SASFoundation/9.4/sas'
-            });
-            if (sasPath) {
-                profile.sasPath = sasPath;
-            }
-        } else {
-            const host = await vscode.window.showInputBox({
-                prompt: 'SAS server hostname',
-                placeHolder: 'sas.example.com'
-            });
-            if (host) {
-                profile.host = host;
-            }
+        switch (profile.type) {
+            case 'soda':
+                cmd.region = profile.region || 'us';
+                cmd.host = SODA_SERVERS[cmd.region];
+                break;
 
-            const portStr = await vscode.window.showInputBox({
-                prompt: 'Port number',
-                value: type.label === 'viya' ? '443' : '8591'
-            });
-            if (portStr) {
-                profile.port = parseInt(portStr, 10);
-            }
+            case 'iom':
+                cmd.host = profile.host;
+                cmd.port = profile.port || 8591;
+                cmd.username = profile.username;
+                break;
+
+            case 'viya':
+                cmd.host = profile.host;
+                cmd.clientId = profile.clientId;
+                cmd.clientSecret = profile.clientSecret;
+                break;
+
+            case 'ssh':
+                cmd.host = profile.host;
+                cmd.port = profile.port || 22;
+                cmd.username = profile.username;
+                break;
         }
 
-        // Save profile
-        const config = vscode.workspace.getConfiguration('sasDebugger');
-        const profiles = config.get<ConnectionProfile[]>('connectionProfiles') || [];
-        profiles.push(profile);
-        await config.update('connectionProfiles', profiles, vscode.ConfigurationTarget.Global);
-
-        vscode.window.showInformationMessage(`Profile "${name}" created`);
+        return cmd;
     }
 
-    /**
-     * Dispose of resources
-     */
-    dispose(): void {
-        this.disconnect();
-        this._onConnectionChanged.dispose();
+    private sendCommand(cmd: any): Promise<any> {
+        return new Promise((resolve, reject) => {
+            if (!this.pythonProcess || !this.pythonProcess.stdin) {
+                reject(new Error('Python bridge not running'));
+                return;
+            }
+
+            const requestId = `req_${++this.requestId}`;
+            cmd.requestId = requestId;
+
+            this.pendingRequests.set(requestId, { resolve, reject });
+
+            this.pythonProcess.stdin.write(JSON.stringify(cmd) + '\n');
+
+            // Timeout after 5 minutes
+            setTimeout(() => {
+                if (this.pendingRequests.has(requestId)) {
+                    this.pendingRequests.delete(requestId);
+                    reject(new Error('Request timeout'));
+                }
+            }, 300000);
+        });
     }
 }

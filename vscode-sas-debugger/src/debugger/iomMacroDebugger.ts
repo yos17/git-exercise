@@ -1,389 +1,153 @@
 import { EventEmitter } from 'events';
 
-/**
- * Macro statement types for parsing
- */
-export type MacroStatementType =
-    | 'macro_def'      // %macro name
-    | 'macro_end'      // %mend
-    | 'macro_call'     // %macroname or %macroname()
-    | 'macro_let'      // %let var = value
-    | 'macro_if'       // %if condition %then
-    | 'macro_else'     // %else
-    | 'macro_do'       // %do / %do var = ...
-    | 'macro_end_do'   // %end
-    | 'macro_goto'     // %goto label
-    | 'macro_label'    // %label:
-    | 'macro_put'      // %put
-    | 'macro_global'   // %global var
-    | 'macro_local'    // %local var
-    | 'macro_return'   // %return
-    | 'macro_sysfunc'  // %sysfunc()
-    | 'macro_eval'     // %eval() / %sysevalf()
-    | 'sas_statement'  // Regular SAS statement
-    | 'comment';       // * comment or /* comment */
-
-/**
- * Parsed macro statement
- */
 export interface MacroStatement {
-    type: MacroStatementType;
-    text: string;
     line: number;
-    endLine: number;
-    macroName?: string;      // For %macro, %mend, %call
-    variableName?: string;   // For %let, %global, %local
-    condition?: string;      // For %if
-    parameters?: string[];   // For macro definitions and calls
+    text: string;
+    type: 'assignment' | 'call' | 'conditional' | 'loop' | 'output' | 'definition' | 'end' | 'other';
+    macroName?: string;
 }
 
-/**
- * Macro execution context
- */
-export interface MacroContext {
-    name: string;
-    startLine: number;
-    localVars: Map<string, string>;
-    parameters: Map<string, string>;
-    callStack: string[];
-}
-
-/**
- * Macro breakpoint
- */
-export interface MacroBreakpoint {
+interface MacroBreakpoint {
     id: number;
     line: number;
-    macroName?: string;
     condition?: string;
     hitCount: number;
     enabled: boolean;
 }
 
+interface MacroContext {
+    name: string;
+    line: number;
+    localVars: Map<string, string>;
+}
+
+type StepMode = 'continue' | 'stepOver' | 'stepInto' | 'stepOut';
+
 /**
  * IOM-based Macro Debugger
  *
- * Uses SAS IOM LanguageService for true step-through macro debugging
- * instead of just parsing MLOGIC/MPRINT output.
- *
- * Key approach:
- * 1. Parse macro code into individual statements
- * 2. Submit each statement via IOM with async mode
- * 3. Use LanguageService events to control execution
- * 4. Query macro variables between steps
+ * Provides true step-through debugging for SAS macros by:
+ * 1. Parsing macro code into individual statements
+ * 2. Submitting each statement via IOM LanguageService
+ * 3. Pausing between statements for step-through control
+ * 4. Tracking macro variable values and call stack
  */
 export class IOMacroDebugger extends EventEmitter {
+    private static BREAKPOINT_ID = 1;
+
     private statements: MacroStatement[] = [];
     private currentStatementIndex: number = 0;
     private breakpoints: Map<number, MacroBreakpoint> = new Map();
     private macroContextStack: MacroContext[] = [];
     private globalMacroVars: Map<string, string> = new Map();
+
     private isRunning: boolean = false;
     private isPaused: boolean = false;
-    private stepMode: 'into' | 'over' | 'out' | 'continue' = 'continue';
+    private stepMode: StepMode = 'continue';
+    private stepOutTargetDepth: number = 0;
 
-    // IOM connection callback
     private submitCallback: ((code: string) => Promise<{ log: string; output: string }>) | null = null;
 
-    private static BREAKPOINT_ID = 1;
-
-    constructor() {
-        super();
-    }
-
-    /**
-     * Set the IOM submit callback for executing code
-     */
     setSubmitCallback(callback: (code: string) => Promise<{ log: string; output: string }>): void {
         this.submitCallback = callback;
     }
 
-    /**
-     * Parse macro source code into executable statements
-     */
-    parseSource(source: string): MacroStatement[] {
+    parseSource(source: string): void {
         this.statements = [];
         const lines = source.split('\n');
-        let currentLine = 0;
-        let inMacroDef = false;
-        let inComment = false;
-        let statementBuffer = '';
-        let statementStartLine = 0;
+
+        let inMacro = false;
+        let currentMacroName = '';
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            currentLine = i + 1;
+            const trimmedLine = line.trim();
+            const lineNum = i + 1;
 
-            // Track multi-line comments
-            if (line.includes('/*') && !line.includes('*/')) {
-                inComment = true;
-            }
-            if (inComment && line.includes('*/')) {
-                inComment = false;
-                continue;
-            }
-            if (inComment) continue;
-
-            // Skip line comments
-            const trimmed = line.trim();
-            if (trimmed.startsWith('*') && trimmed.endsWith(';')) {
-                this.statements.push({
-                    type: 'comment',
-                    text: line,
-                    line: currentLine,
-                    endLine: currentLine
-                });
+            if (!trimmedLine || trimmedLine.startsWith('/*') || trimmedLine.startsWith('*')) {
                 continue;
             }
 
-            // Buffer statements until semicolon
-            if (statementBuffer === '') {
-                statementStartLine = currentLine;
-            }
-            statementBuffer += line + ' ';
+            const statement = this.parseStatement(trimmedLine, lineNum, inMacro, currentMacroName);
 
-            // Check for complete statement (ends with ;)
-            if (trimmed.endsWith(';') || this.isCompleteStatement(statementBuffer)) {
-                const statement = this.parseStatement(statementBuffer.trim(), statementStartLine, currentLine);
-                if (statement) {
-                    this.statements.push(statement);
-
-                    // Track macro definitions
-                    if (statement.type === 'macro_def') {
-                        inMacroDef = true;
-                    } else if (statement.type === 'macro_end') {
-                        inMacroDef = false;
-                    }
+            if (statement) {
+                if (statement.type === 'definition') {
+                    inMacro = true;
+                    currentMacroName = statement.macroName || '';
+                } else if (statement.type === 'end' && trimmedLine.toUpperCase().startsWith('%MEND')) {
+                    inMacro = false;
+                    currentMacroName = '';
                 }
-                statementBuffer = '';
+
+                this.statements.push(statement);
             }
         }
-
-        return this.statements;
     }
 
-    /**
-     * Check if statement buffer contains a complete statement
-     */
-    private isCompleteStatement(buffer: string): boolean {
-        const trimmed = buffer.trim();
-        // Macro statements that don't need semicolons
-        if (trimmed.match(/^%if\s+.+\s+%then\s*$/i)) return true;
-        if (trimmed.match(/^%else\s*$/i)) return true;
-        if (trimmed.match(/^%do\s*;?\s*$/i)) return true;
-        if (trimmed.match(/^%end\s*;?\s*$/i)) return true;
-        return trimmed.endsWith(';');
+    private parseStatement(line: string, lineNum: number, inMacro: boolean, macroName: string): MacroStatement | null {
+        const upperLine = line.toUpperCase();
+
+        // %LET assignment
+        if (upperLine.startsWith('%LET ')) {
+            return { line: lineNum, text: line, type: 'assignment' };
+        }
+
+        // %MACRO definition
+        if (upperLine.startsWith('%MACRO ')) {
+            const match = line.match(/%macro\s+(\w+)/i);
+            return {
+                line: lineNum,
+                text: line,
+                type: 'definition',
+                macroName: match ? match[1] : undefined
+            };
+        }
+
+        // %MEND
+        if (upperLine.startsWith('%MEND')) {
+            return { line: lineNum, text: line, type: 'end', macroName };
+        }
+
+        // %IF/%THEN/%ELSE
+        if (upperLine.startsWith('%IF ') || upperLine.startsWith('%THEN ') ||
+            upperLine.startsWith('%ELSE ') || upperLine === '%ELSE') {
+            return { line: lineNum, text: line, type: 'conditional' };
+        }
+
+        // %DO loop
+        if (upperLine.startsWith('%DO ') || upperLine === '%DO' ||
+            upperLine.startsWith('%DO;') || upperLine === '%END' || upperLine.startsWith('%END;')) {
+            return { line: lineNum, text: line, type: 'loop' };
+        }
+
+        // %PUT output
+        if (upperLine.startsWith('%PUT ')) {
+            return { line: lineNum, text: line, type: 'output' };
+        }
+
+        // Macro call
+        if (line.match(/^%\w+/)) {
+            const match = line.match(/^%(\w+)/);
+            return {
+                line: lineNum,
+                text: line,
+                type: 'call',
+                macroName: match ? match[1] : undefined
+            };
+        }
+
+        // Other statements that might contain macro references
+        if (line.includes('&') || line.includes('%')) {
+            return { line: lineNum, text: line, type: 'other' };
+        }
+
+        return null;
     }
 
-    /**
-     * Parse a single statement
-     */
-    private parseStatement(text: string, startLine: number, endLine: number): MacroStatement | null {
-        const trimmed = text.trim();
-        const upperText = trimmed.toUpperCase();
-
-        // %macro definition
-        let match = trimmed.match(/^%macro\s+(\w+)\s*(\([^)]*\))?\s*;?/i);
-        if (match) {
-            const params = match[2] ? this.parseParameters(match[2]) : [];
-            return {
-                type: 'macro_def',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                macroName: match[1],
-                parameters: params
-            };
-        }
-
-        // %mend
-        match = trimmed.match(/^%mend\s*(\w*)\s*;?/i);
-        if (match) {
-            return {
-                type: 'macro_end',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                macroName: match[1] || undefined
-            };
-        }
-
-        // %let
-        match = trimmed.match(/^%let\s+(\w+)\s*=\s*(.*);\s*$/i);
-        if (match) {
-            return {
-                type: 'macro_let',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                variableName: match[1]
-            };
-        }
-
-        // %global
-        match = trimmed.match(/^%global\s+(.+);\s*$/i);
-        if (match) {
-            return {
-                type: 'macro_global',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                variableName: match[1].trim()
-            };
-        }
-
-        // %local
-        match = trimmed.match(/^%local\s+(.+);\s*$/i);
-        if (match) {
-            return {
-                type: 'macro_local',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                variableName: match[1].trim()
-            };
-        }
-
-        // %if
-        match = trimmed.match(/^%if\s+(.+)\s+%then/i);
-        if (match) {
-            return {
-                type: 'macro_if',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                condition: match[1].trim()
-            };
-        }
-
-        // %else
-        if (upperText.startsWith('%ELSE')) {
-            return {
-                type: 'macro_else',
-                text: trimmed,
-                line: startLine,
-                endLine
-            };
-        }
-
-        // %do
-        match = trimmed.match(/^%do\s*(\w+\s*=.+)?;?\s*$/i);
-        if (match) {
-            return {
-                type: 'macro_do',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                condition: match[1]?.trim()
-            };
-        }
-
-        // %end
-        if (upperText.match(/^%END\s*;?\s*$/)) {
-            return {
-                type: 'macro_end_do',
-                text: trimmed,
-                line: startLine,
-                endLine
-            };
-        }
-
-        // %put
-        match = trimmed.match(/^%put\s+(.*);\s*$/i);
-        if (match) {
-            return {
-                type: 'macro_put',
-                text: trimmed,
-                line: startLine,
-                endLine
-            };
-        }
-
-        // %goto
-        match = trimmed.match(/^%goto\s+(\w+)\s*;?\s*$/i);
-        if (match) {
-            return {
-                type: 'macro_goto',
-                text: trimmed,
-                line: startLine,
-                endLine
-            };
-        }
-
-        // %return
-        if (upperText.match(/^%RETURN\s*;?\s*$/)) {
-            return {
-                type: 'macro_return',
-                text: trimmed,
-                line: startLine,
-                endLine
-            };
-        }
-
-        // Macro call: %macroname or %macroname()
-        match = trimmed.match(/^%(\w+)\s*(\([^)]*\))?\s*;?\s*$/i);
-        if (match && !this.isReservedMacroKeyword(match[1])) {
-            return {
-                type: 'macro_call',
-                text: trimmed,
-                line: startLine,
-                endLine,
-                macroName: match[1],
-                parameters: match[2] ? this.parseCallParameters(match[2]) : []
-            };
-        }
-
-        // Regular SAS statement
-        return {
-            type: 'sas_statement',
-            text: trimmed,
-            line: startLine,
-            endLine
-        };
-    }
-
-    /**
-     * Check if word is a reserved macro keyword
-     */
-    private isReservedMacroKeyword(word: string): boolean {
-        const reserved = [
-            'macro', 'mend', 'let', 'if', 'then', 'else', 'do', 'end',
-            'goto', 'global', 'local', 'return', 'put', 'sysfunc', 'eval',
-            'sysevalf', 'str', 'nrstr', 'quote', 'bquote', 'superq', 'scan',
-            'substr', 'index', 'length', 'upcase', 'lowcase', 'include'
-        ];
-        return reserved.includes(word.toLowerCase());
-    }
-
-    /**
-     * Parse macro definition parameters
-     */
-    private parseParameters(paramStr: string): string[] {
-        // Remove parentheses
-        const inner = paramStr.slice(1, -1).trim();
-        if (!inner) return [];
-
-        return inner.split(',').map(p => p.trim().split('=')[0].trim());
-    }
-
-    /**
-     * Parse macro call parameters
-     */
-    private parseCallParameters(paramStr: string): string[] {
-        const inner = paramStr.slice(1, -1).trim();
-        if (!inner) return [];
-
-        return inner.split(',').map(p => p.trim());
-    }
-
-    /**
-     * Set a breakpoint
-     */
-    setBreakpoint(line: number, macroName?: string, condition?: string): MacroBreakpoint {
+    setBreakpoint(line: number, condition?: string): MacroBreakpoint {
         const bp: MacroBreakpoint = {
             id: IOMacroDebugger.BREAKPOINT_ID++,
             line,
-            macroName,
             condition,
             hitCount: 0,
             enabled: true
@@ -392,16 +156,10 @@ export class IOMacroDebugger extends EventEmitter {
         return bp;
     }
 
-    /**
-     * Remove a breakpoint by ID
-     */
     removeBreakpoint(id: number): boolean {
         return this.breakpoints.delete(id);
     }
 
-    /**
-     * Remove a breakpoint by line number
-     */
     removeBreakpointByLine(line: number): boolean {
         for (const [id, bp] of this.breakpoints) {
             if (bp.line === line) {
@@ -411,23 +169,16 @@ export class IOMacroDebugger extends EventEmitter {
         return false;
     }
 
-    /**
-     * Clear all breakpoints
-     */
     clearBreakpoints(): void {
         this.breakpoints.clear();
     }
 
-    /**
-     * Start debugging from the beginning
-     */
     async start(stopOnEntry: boolean = true): Promise<void> {
         this.currentStatementIndex = 0;
         this.isRunning = true;
         this.macroContextStack = [];
         this.globalMacroVars.clear();
 
-        // Initialize global macro variables from SAS session
         await this.refreshGlobalMacroVars();
 
         if (stopOnEntry && this.statements.length > 0) {
@@ -438,55 +189,71 @@ export class IOMacroDebugger extends EventEmitter {
         }
     }
 
-    /**
-     * Continue execution until next breakpoint
-     */
     async continue(): Promise<void> {
         this.stepMode = 'continue';
         this.isPaused = false;
         await this.executeUntilBreakpoint();
     }
 
-    /**
-     * Step to next statement (step over)
-     */
     async stepOver(): Promise<void> {
-        this.stepMode = 'over';
+        this.stepMode = 'stepOver';
+        this.isPaused = false;
+
+        const currentDepth = this.macroContextStack.length;
         await this.executeNextStatement();
+
+        // If we stepped into a macro, continue until we're back at same depth
+        while (this.isRunning && !this.isPaused && this.macroContextStack.length > currentDepth) {
+            await this.executeNextStatement();
+        }
+
+        if (this.isRunning && !this.isPaused) {
+            this.isPaused = true;
+            this.emitStopEvent();
+        }
     }
 
-    /**
-     * Step into macro call
-     */
     async stepInto(): Promise<void> {
-        this.stepMode = 'into';
+        this.stepMode = 'stepInto';
+        this.isPaused = false;
         await this.executeNextStatement();
+
+        if (this.isRunning && !this.isPaused) {
+            this.isPaused = true;
+            this.emitStopEvent();
+        }
     }
 
-    /**
-     * Step out of current macro
-     */
     async stepOut(): Promise<void> {
-        this.stepMode = 'out';
-        await this.executeUntilMacroEnd();
+        this.stepMode = 'stepOut';
+        this.stepOutTargetDepth = Math.max(0, this.macroContextStack.length - 1);
+        this.isPaused = false;
+
+        while (this.isRunning && !this.isPaused &&
+               this.macroContextStack.length > this.stepOutTargetDepth) {
+            await this.executeNextStatement();
+        }
+
+        if (this.isRunning && !this.isPaused) {
+            this.isPaused = true;
+            this.emitStopEvent();
+        }
     }
 
-    /**
-     * Execute statements until a breakpoint is hit
-     */
     private async executeUntilBreakpoint(): Promise<void> {
-        while (this.currentStatementIndex < this.statements.length && !this.isPaused) {
+        while (this.isRunning && !this.isPaused &&
+               this.currentStatementIndex < this.statements.length) {
+
             const stmt = this.statements[this.currentStatementIndex];
 
-            // Check for breakpoint
-            if (this.shouldBreak(stmt)) {
+            // Check breakpoints
+            if (this.shouldStopAtBreakpoint(stmt)) {
                 this.isPaused = true;
                 this.emit('stopOnBreakpoint', stmt);
                 return;
             }
 
-            await this.executeStatement(stmt);
-            this.currentStatementIndex++;
+            await this.executeNextStatement();
         }
 
         if (this.currentStatementIndex >= this.statements.length) {
@@ -495,9 +262,6 @@ export class IOMacroDebugger extends EventEmitter {
         }
     }
 
-    /**
-     * Execute the next statement and pause
-     */
     private async executeNextStatement(): Promise<void> {
         if (this.currentStatementIndex >= this.statements.length) {
             this.isRunning = false;
@@ -506,245 +270,155 @@ export class IOMacroDebugger extends EventEmitter {
         }
 
         const stmt = this.statements[this.currentStatementIndex];
-        await this.executeStatement(stmt);
-        this.currentStatementIndex++;
-
-        if (this.currentStatementIndex < this.statements.length) {
-            this.isPaused = true;
-            this.emit('stopOnStep', this.statements[this.currentStatementIndex]);
-        } else {
-            this.isRunning = false;
-            this.emit('end');
-        }
-    }
-
-    /**
-     * Execute until end of current macro
-     */
-    private async executeUntilMacroEnd(): Promise<void> {
-        const initialStackDepth = this.macroContextStack.length;
-
-        while (this.currentStatementIndex < this.statements.length) {
-            const stmt = this.statements[this.currentStatementIndex];
-            await this.executeStatement(stmt);
-            this.currentStatementIndex++;
-
-            // Stop when we exit the macro we were in
-            if (stmt.type === 'macro_end' && this.macroContextStack.length < initialStackDepth) {
-                if (this.currentStatementIndex < this.statements.length) {
-                    this.isPaused = true;
-                    this.emit('stopOnStep', this.statements[this.currentStatementIndex]);
-                }
-                return;
-            }
-        }
-
-        this.isRunning = false;
-        this.emit('end');
-    }
-
-    /**
-     * Execute a single statement via IOM
-     */
-    private async executeStatement(stmt: MacroStatement): Promise<void> {
-        if (!this.submitCallback) {
-            throw new Error('No IOM submit callback configured');
-        }
-
         this.emit('beforeExecute', stmt);
 
         try {
-            // Track macro context
-            if (stmt.type === 'macro_def') {
-                this.macroContextStack.push({
-                    name: stmt.macroName || 'unknown',
-                    startLine: stmt.line,
-                    localVars: new Map(),
-                    parameters: new Map(),
-                    callStack: []
-                });
-            }
-
-            // Submit statement to SAS via IOM
-            const result = await this.submitCallback(stmt.text);
-
-            // Parse result for macro variable changes
-            this.parseExecutionResult(result.log, stmt);
-
-            // Update context after execution
-            if (stmt.type === 'macro_end') {
-                this.macroContextStack.pop();
-            }
-
-            // Refresh macro variables after %let, %global, %local
-            if (['macro_let', 'macro_global', 'macro_local'].includes(stmt.type)) {
-                await this.refreshGlobalMacroVars();
-            }
-
-            this.emit('afterExecute', stmt, result);
-
+            await this.executeStatement(stmt);
+            this.emit('afterExecute', stmt);
         } catch (error) {
             this.emit('error', stmt, error);
-            throw error;
+            this.isPaused = true;
+            return;
+        }
+
+        this.currentStatementIndex++;
+    }
+
+    private async executeStatement(stmt: MacroStatement): Promise<void> {
+        if (!this.submitCallback) {
+            throw new Error('Submit callback not configured');
+        }
+
+        const result = await this.submitCallback(stmt.text);
+
+        // Check for errors
+        if (result.log.includes('ERROR:')) {
+            const errorMatch = result.log.match(/ERROR:\s*(.+)/);
+            throw new Error(errorMatch ? errorMatch[1] : 'SAS macro error');
+        }
+
+        // Update state based on statement type
+        switch (stmt.type) {
+            case 'definition':
+                if (stmt.macroName) {
+                    this.macroContextStack.push({
+                        name: stmt.macroName,
+                        line: stmt.line,
+                        localVars: new Map()
+                    });
+                }
+                break;
+
+            case 'end':
+                if (stmt.text.toUpperCase().includes('%MEND')) {
+                    this.macroContextStack.pop();
+                }
+                break;
+
+            case 'assignment':
+                await this.refreshGlobalMacroVars();
+                break;
+
+            case 'call':
+                // Macro call might define local variables
+                await this.refreshGlobalMacroVars();
+                break;
+
+            case 'output':
+                // %PUT - extract the output
+                const putMatch = stmt.text.match(/%put\s+(.+);/i);
+                if (putMatch) {
+                    this.emit('output', putMatch[1], 'stdout');
+                }
+                break;
         }
     }
 
-    /**
-     * Check if execution should break at this statement
-     */
-    private shouldBreak(stmt: MacroStatement): boolean {
+    private shouldStopAtBreakpoint(stmt: MacroStatement): boolean {
         for (const bp of this.breakpoints.values()) {
             if (!bp.enabled) continue;
+            if (bp.line !== stmt.line) continue;
 
-            // Line match
-            if (stmt.line >= bp.line && stmt.endLine <= bp.line) {
-                // Macro name filter
-                if (bp.macroName) {
-                    const currentMacro = this.macroContextStack[this.macroContextStack.length - 1];
-                    if (!currentMacro || currentMacro.name !== bp.macroName) {
-                        continue;
-                    }
-                }
+            bp.hitCount++;
 
-                // Condition evaluation
-                if (bp.condition) {
-                    if (!this.evaluateCondition(bp.condition)) {
-                        continue;
-                    }
-                }
-
-                bp.hitCount++;
-                return true;
+            // Check condition
+            if (bp.condition) {
+                const conditionMet = this.evaluateCondition(bp.condition);
+                if (!conditionMet) continue;
             }
+
+            return true;
         }
         return false;
     }
 
-    /**
-     * Evaluate a breakpoint condition
-     */
     private evaluateCondition(condition: string): boolean {
-        // Simple condition evaluation
-        // Supports: &var = value, &var > value, etc.
-        const match = condition.match(/^&(\w+)\s*(=|>|<|>=|<=|!=)\s*(.+)$/);
-        if (!match) return true;
+        // Simple condition evaluation - check macro variable values
+        const varMatch = condition.match(/&(\w+)\s*(=|!=|>|<|>=|<=)\s*(.+)/);
+        if (varMatch) {
+            const [, varName, operator, expected] = varMatch;
+            const actual = this.globalMacroVars.get(varName.toUpperCase()) || '';
 
-        const [, varName, operator, value] = match;
-        const varValue = this.globalMacroVars.get(varName.toUpperCase()) || '';
-
-        switch (operator) {
-            case '=': return varValue === value.trim();
-            case '!=': return varValue !== value.trim();
-            case '>': return parseFloat(varValue) > parseFloat(value);
-            case '<': return parseFloat(varValue) < parseFloat(value);
-            case '>=': return parseFloat(varValue) >= parseFloat(value);
-            case '<=': return parseFloat(varValue) <= parseFloat(value);
-            default: return true;
-        }
-    }
-
-    /**
-     * Parse execution result for macro variable updates
-     */
-    private parseExecutionResult(log: string, stmt: MacroStatement): void {
-        // Parse SYMBOLGEN output
-        const symbolgenPattern = /SYMBOLGEN:\s+Macro variable (\w+) resolves to (.+)/g;
-        let match;
-        while ((match = symbolgenPattern.exec(log)) !== null) {
-            const [, varName, value] = match;
-            this.globalMacroVars.set(varName.toUpperCase(), value);
-        }
-
-        // Parse %PUT output
-        if (stmt.type === 'macro_put') {
-            const putPattern = /^(.+)$/gm;
-            while ((match = putPattern.exec(log)) !== null) {
-                this.emit('output', match[1], 'stdout');
+            switch (operator) {
+                case '=': return actual === expected.trim();
+                case '!=': return actual !== expected.trim();
+                case '>': return parseFloat(actual) > parseFloat(expected);
+                case '<': return parseFloat(actual) < parseFloat(expected);
+                case '>=': return parseFloat(actual) >= parseFloat(expected);
+                case '<=': return parseFloat(actual) <= parseFloat(expected);
             }
         }
 
-        // Parse errors
-        if (log.includes('ERROR:')) {
-            const errorPattern = /ERROR[^:]*:\s*(.+)/g;
-            while ((match = errorPattern.exec(log)) !== null) {
-                this.emit('output', match[0], 'stderr');
-            }
+        return true;
+    }
+
+    private emitStopEvent(): void {
+        if (this.currentStatementIndex < this.statements.length) {
+            this.emit('stopOnStep', this.statements[this.currentStatementIndex]);
         }
     }
 
-    /**
-     * Refresh global macro variables from SAS session
-     */
-    private async refreshGlobalMacroVars(): Promise<void> {
+    async refreshGlobalMacroVars(): Promise<void> {
         if (!this.submitCallback) return;
 
         try {
             const result = await this.submitCallback('%put _global_;');
-
-            // Parse global macro variables
-            const varPattern = /^GLOBAL\s+(\w+)\s*(.*)$/gm;
-            let match;
-            while ((match = varPattern.exec(result.log)) !== null) {
-                const [, name, value] = match;
-                this.globalMacroVars.set(name.toUpperCase(), value.trim());
-            }
+            this.parseGlobalMacroVars(result.log);
         } catch {
-            // Ignore errors in variable refresh
+            // Ignore errors during refresh
         }
     }
 
-    /**
-     * Get current macro variables
-     */
+    private parseGlobalMacroVars(log: string): void {
+        const lines = log.split('\n');
+
+        for (const line of lines) {
+            const match = line.match(/^GLOBAL\s+(\w+)\s+(.*)$/);
+            if (match) {
+                this.globalMacroVars.set(match[1].toUpperCase(), match[2].trim());
+            }
+        }
+    }
+
     getGlobalMacroVars(): Map<string, string> {
         return new Map(this.globalMacroVars);
     }
 
-    /**
-     * Get local macro variables for current context
-     */
     getLocalMacroVars(): Map<string, string> {
-        const current = this.macroContextStack[this.macroContextStack.length - 1];
-        return current ? new Map(current.localVars) : new Map();
+        if (this.macroContextStack.length > 0) {
+            return this.macroContextStack[this.macroContextStack.length - 1].localVars;
+        }
+        return new Map();
     }
 
-    /**
-     * Get current statement
-     */
-    getCurrentStatement(): MacroStatement | null {
-        return this.statements[this.currentStatementIndex] || null;
-    }
-
-    /**
-     * Get current macro context
-     */
-    getCurrentMacroContext(): MacroContext | null {
-        return this.macroContextStack[this.macroContextStack.length - 1] || null;
-    }
-
-    /**
-     * Get call stack
-     */
     getCallStack(): { name: string; line: number }[] {
-        return this.macroContextStack.map(ctx => ({
-            name: `%${ctx.name}`,
-            line: ctx.startLine
-        }));
+        return [...this.macroContextStack];
     }
 
-    /**
-     * Get all parsed statements
-     */
-    getStatements(): MacroStatement[] {
-        return [...this.statements];
-    }
-
-    /**
-     * Stop debugging
-     */
-    stop(): void {
-        this.isRunning = false;
-        this.isPaused = false;
-        this.emit('end');
+    getCurrentStatement(): MacroStatement | null {
+        if (this.currentStatementIndex < this.statements.length) {
+            return this.statements[this.currentStatementIndex];
+        }
+        return null;
     }
 }

@@ -1,41 +1,38 @@
 {
-  "name": "sas-debugger",
-  "displayName": "SAS Debugger",
-  "description": "Debug SAS DATA steps and macros with dataset viewing capabilities - inspired by MACUMBA",
-  "version": "0.1.0",
-  "publisher": "sas-debugger",
+  "name": "sas-studio-ai",
+  "displayName": "SAS Studio AI",
+  "description": "AI-powered SAS development environment with debugging, dataset viewing, and secure data anonymization",
+  "version": "1.0.0",
+  "publisher": "sas-studio-ai",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Debuggers",
     "Programming Languages",
-    "Data Science"
+    "Debuggers",
+    "Data Science",
+    "Machine Learning"
   ],
   "keywords": [
     "SAS",
-    "debugger",
-    "data step",
-    "macro",
-    "dataset viewer"
+    "Statistics",
+    "Data Analysis",
+    "AI",
+    "Debugging",
+    "Data Anonymization"
   ],
   "activationEvents": [
     "onLanguage:sas",
-    "onDebug",
-    "onCommand:sasDebugger.connectToSAS"
+    "onDebugResolve:sas",
+    "onCommand:sasStudioAI.connect"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "languages": [
       {
         "id": "sas",
-        "aliases": [
-          "SAS",
-          "sas"
-        ],
-        "extensions": [
-          ".sas"
-        ],
+        "aliases": ["SAS", "sas"],
+        "extensions": [".sas", ".SAS"],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -46,43 +43,213 @@
         "path": "./syntaxes/sas.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "sasStudioAI.connect",
+        "title": "SAS: Connect to Server",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "sasStudioAI.disconnect",
+        "title": "SAS: Disconnect",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "sasStudioAI.runCode",
+        "title": "SAS: Run Selected Code",
+        "icon": "$(play)"
+      },
+      {
+        "command": "sasStudioAI.runFile",
+        "title": "SAS: Run Entire File",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "sasStudioAI.viewDataset",
+        "title": "SAS: View Dataset",
+        "icon": "$(table)"
+      },
+      {
+        "command": "sasStudioAI.anonymizeDataset",
+        "title": "SAS: Anonymize & Export Dataset",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "sasStudioAI.aiExplain",
+        "title": "SAS AI: Explain Selected Code",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "sasStudioAI.aiGenerate",
+        "title": "SAS AI: Generate Code from Description",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "sasStudioAI.aiOptimize",
+        "title": "SAS AI: Optimize Selected Code",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "sasStudioAI.aiDebugHelp",
+        "title": "SAS AI: Help Debug Error",
+        "icon": "$(bug)"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorLangId == sas",
+          "command": "sasStudioAI.runCode",
+          "group": "sas@1"
+        },
+        {
+          "when": "editorLangId == sas",
+          "command": "sasStudioAI.aiExplain",
+          "group": "sas@2"
+        },
+        {
+          "when": "editorLangId == sas",
+          "command": "sasStudioAI.aiOptimize",
+          "group": "sas@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sasStudioAI.viewDataset",
+          "when": "view == sasLibraries && viewItem == dataset",
+          "group": "inline"
+        },
+        {
+          "command": "sasStudioAI.anonymizeDataset",
+          "when": "view == sasLibraries && viewItem == dataset",
+          "group": "inline"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sasStudioAI",
+          "title": "SAS Studio AI",
+          "icon": "resources/sas-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sasStudioAI": [
+        {
+          "id": "sasConnection",
+          "name": "Connection"
+        },
+        {
+          "id": "sasLibraries",
+          "name": "Libraries"
+        },
+        {
+          "id": "sasMacroVars",
+          "name": "Macro Variables"
+        },
+        {
+          "id": "sasResults",
+          "name": "Results"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SAS Studio AI",
+      "properties": {
+        "sasStudioAI.connections": {
+          "type": "array",
+          "default": [],
+          "description": "SAS connection profiles",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string", "enum": ["soda", "iom", "viya", "ssh"] },
+              "host": { "type": "string" },
+              "port": { "type": "number" },
+              "username": { "type": "string" }
+            }
+          }
+        },
+        "sasStudioAI.defaultConnection": {
+          "type": "string",
+          "default": "",
+          "description": "Default connection profile name"
+        },
+        "sasStudioAI.ai.provider": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "local"],
+          "default": "anthropic",
+          "description": "AI provider for code assistance"
+        },
+        "sasStudioAI.ai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for AI provider"
+        },
+        "sasStudioAI.ai.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-20250514",
+          "description": "AI model to use"
+        },
+        "sasStudioAI.anonymization.defaultMethod": {
+          "type": "string",
+          "enum": ["random", "shuffle", "mask", "synthetic"],
+          "default": "synthetic",
+          "description": "Default data anonymization method"
+        },
+        "sasStudioAI.anonymization.preserveDistribution": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preserve statistical distribution when anonymizing"
+        },
+        "sasStudioAI.python.path": {
+          "type": "string",
+          "default": "python3",
+          "description": "Path to Python executable"
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "sas"
+      }
+    ],
     "debuggers": [
       {
         "type": "sas",
         "label": "SAS Debugger",
-        "languages": [
-          "sas"
-        ],
+        "program": "./dist/debugAdapter.js",
+        "runtime": "node",
+        "languages": ["sas"],
         "configurationAttributes": {
           "launch": {
-            "required": [
-              "program"
-            ],
+            "required": ["program"],
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Absolute path to the SAS program file",
-                "default": "${file}"
+                "description": "Path to SAS program to debug"
               },
-              "connectionProfile": {
+              "connection": {
                 "type": "string",
-                "description": "Name of the SAS connection profile to use",
-                "default": "default"
-              },
-              "stopOnEntry": {
-                "type": "boolean",
-                "description": "Automatically stop after launch",
-                "default": true
+                "description": "Connection profile name"
               },
               "debugDataSteps": {
                 "type": "boolean",
-                "description": "Enable DATA step debugging",
-                "default": true
+                "default": true,
+                "description": "Enable DATA step debugging"
               },
               "debugMacros": {
                 "type": "boolean",
-                "description": "Enable macro debugging (MLOGIC/MPRINT/SYMBOLGEN)",
-                "default": true
+                "default": true,
+                "description": "Enable macro debugging"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": true,
+                "description": "Stop on first executable statement"
               }
             }
           }
@@ -93,242 +260,25 @@
             "request": "launch",
             "name": "Debug SAS Program",
             "program": "${file}",
-            "connectionProfile": "default",
-            "stopOnEntry": true,
             "debugDataSteps": true,
-            "debugMacros": true
+            "debugMacros": true,
+            "stopOnEntry": true
           }
         ],
         "configurationSnippets": [
           {
             "label": "SAS: Debug Program",
-            "description": "Debug a SAS program with DATA step and macro debugging",
+            "description": "Debug a SAS program",
             "body": {
               "type": "sas",
               "request": "launch",
-              "name": "Debug SAS Program",
-              "program": "^\"\\${file}\"",
-              "connectionProfile": "default",
-              "stopOnEntry": true,
+              "name": "Debug SAS",
+              "program": "^\"${file}\"",
               "debugDataSteps": true,
               "debugMacros": true
             }
           }
         ]
-      }
-    ],
-    "breakpoints": [
-      {
-        "language": "sas"
-      }
-    ],
-    "commands": [
-      {
-        "command": "sasDebugger.connectToSAS",
-        "title": "SAS: Connect to SAS Server",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.disconnectFromSAS",
-        "title": "SAS: Disconnect from SAS Server",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.runCode",
-        "title": "SAS: Run Selected Code",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.runFile",
-        "title": "SAS: Run Current File",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.viewDataset",
-        "title": "SAS: View Dataset",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.browseLibraries",
-        "title": "SAS: Browse Libraries",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.showMacroVariables",
-        "title": "SAS: Show Macro Variables",
-        "category": "SAS Debugger"
-      },
-      {
-        "command": "sasDebugger.clearLog",
-        "title": "SAS: Clear Log",
-        "category": "SAS Debugger"
-      }
-    ],
-    "menus": {
-      "editor/context": [
-        {
-          "when": "resourceLangId == sas",
-          "command": "sasDebugger.runCode",
-          "group": "sas@1"
-        },
-        {
-          "when": "resourceLangId == sas",
-          "command": "sasDebugger.runFile",
-          "group": "sas@2"
-        }
-      ],
-      "explorer/context": [
-        {
-          "when": "resourceExtname == .sas7bdat",
-          "command": "sasDebugger.viewDataset",
-          "group": "sas@1"
-        }
-      ]
-    },
-    "views": {
-      "debug": [
-        {
-          "id": "sasLibraries",
-          "name": "SAS Libraries",
-          "when": "sasDebugger.connected"
-        },
-        {
-          "id": "sasMacroVariables",
-          "name": "Macro Variables",
-          "when": "sasDebugger.debugging"
-        },
-        {
-          "id": "sasPDV",
-          "name": "Program Data Vector",
-          "when": "sasDebugger.dataStepDebugging"
-        }
-      ]
-    },
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "sasExplorer",
-          "title": "SAS Explorer",
-          "icon": "media/sas-icon.svg"
-        }
-      ]
-    },
-    "configuration": {
-      "title": "SAS Debugger",
-      "properties": {
-        "sasDebugger.connectionProfiles": {
-          "type": "array",
-          "default": [],
-          "description": "SAS connection profiles",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string",
-                "description": "Profile name"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "saspy",
-                  "iom",
-                  "viya"
-                ],
-                "description": "Connection type"
-              },
-              "host": {
-                "type": "string",
-                "description": "SAS server hostname"
-              },
-              "port": {
-                "type": "number",
-                "description": "SAS server port"
-              },
-              "sasPath": {
-                "type": "string",
-                "description": "Path to local SAS executable (for SASPy local)"
-              },
-              "username": {
-                "type": "string",
-                "description": "Username for authentication"
-              },
-              "authType": {
-                "type": "string",
-                "enum": [
-                  "password",
-                  "token",
-                  "integrated"
-                ],
-                "description": "Authentication type"
-              }
-            }
-          }
-        },
-        "sasDebugger.pythonPath": {
-          "type": "string",
-          "default": "python",
-          "description": "Path to Python executable with SASPy installed"
-        },
-        "sasDebugger.defaultProfile": {
-          "type": "string",
-          "default": "default",
-          "description": "Default connection profile name"
-        },
-        "sasDebugger.autoConnect": {
-          "type": "boolean",
-          "default": false,
-          "description": "Automatically connect to SAS when opening a .sas file"
-        },
-        "sasDebugger.logLevel": {
-          "type": "string",
-          "enum": [
-            "error",
-            "warn",
-            "info",
-            "debug"
-          ],
-          "default": "info",
-          "description": "Logging level for the extension"
-        },
-        "sasDebugger.macroDebugging.mlogic": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable MLOGIC option for macro debugging"
-        },
-        "sasDebugger.macroDebugging.mprint": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable MPRINT option for macro debugging"
-        },
-        "sasDebugger.macroDebugging.symbolgen": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable SYMBOLGEN option for macro debugging"
-        },
-        "sasDebugger.datasetViewer.pageSize": {
-          "type": "number",
-          "default": 1000,
-          "description": "Number of rows to load per page in dataset viewer"
-        },
-        "sasDebugger.datasetViewer.maxColumns": {
-          "type": "number",
-          "default": 100,
-          "description": "Maximum number of columns to display"
-        }
-      }
-    },
-    "keybindings": [
-      {
-        "command": "sasDebugger.runCode",
-        "key": "ctrl+shift+r",
-        "mac": "cmd+shift+r",
-        "when": "editorTextFocus && resourceLangId == sas"
-      },
-      {
-        "command": "sasDebugger.runFile",
-        "key": "ctrl+shift+f5",
-        "mac": "cmd+shift+f5",
-        "when": "resourceLangId == sas"
       }
     ]
   },
@@ -338,17 +288,13 @@
     "watch": "webpack --watch",
     "package": "webpack --mode production --devtool hidden-source-map",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js",
-    "build:webview": "cd webview-ui && npm run build"
+    "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
-    "@vscode/debugadapter": "^1.64.0",
-    "@vscode/debugprotocol": "^1.64.0",
-    "@vscode/test-electron": "^2.3.8",
     "eslint": "^8.54.0",
     "ts-loader": "^9.5.1",
     "typescript": "^5.3.2",
@@ -356,6 +302,9 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "@vscode/webview-ui-toolkit": "^1.4.0"
+    "@anthropic-ai/sdk": "^0.10.0",
+    "@vscode/debugadapter": "^1.64.0",
+    "@vscode/debugprotocol": "^1.64.0",
+    "openai": "^4.20.0"
   }
 }

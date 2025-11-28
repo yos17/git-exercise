@@ -1,13 +1,10 @@
 node_modules/
-dist/
 out/
-.vscode-test/
+dist/
 *.vsix
-.DS_Store
+.vscode-test/
 *.log
-*.pyc
+.DS_Store
 __pycache__/
+*.pyc
 .env
-.idea/
-*.swp
-*.swo
