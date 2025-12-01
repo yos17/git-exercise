@@ -43,6 +43,12 @@
         "path": "./syntaxes/sas.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "sas",
+        "path": "./snippets/sas.json"
+      }
+    ],
     "commands": [
       {
         "command": "sasStudioAI.connect",

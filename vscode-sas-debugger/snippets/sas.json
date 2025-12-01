@@ -1,0 +1,506 @@
+{
+  "DATA Step Basic": {
+    "prefix": "data",
+    "body": [
+      "DATA ${1:output_dataset};",
+      "\tSET ${2:input_dataset};",
+      "\t$0",
+      "RUN;"
+    ],
+    "description": "Basic DATA step"
+  },
+  "DATA Step with WHERE": {
+    "prefix": "datawhere",
+    "body": [
+      "DATA ${1:output_dataset};",
+      "\tSET ${2:input_dataset};",
+      "\tWHERE ${3:condition};",
+      "\t$0",
+      "RUN;"
+    ],
+    "description": "DATA step with WHERE clause"
+  },
+  "DATA Step Merge": {
+    "prefix": "datamerge",
+    "body": [
+      "PROC SORT DATA=${1:dataset1} OUT=${1:dataset1}_sorted;",
+      "\tBY ${3:key_variable};",
+      "RUN;",
+      "",
+      "PROC SORT DATA=${2:dataset2} OUT=${2:dataset2}_sorted;",
+      "\tBY ${3:key_variable};",
+      "RUN;",
+      "",
+      "DATA ${4:merged_dataset};",
+      "\tMERGE ${1:dataset1}_sorted(IN=a)",
+      "\t      ${2:dataset2}_sorted(IN=b);",
+      "\tBY ${3:key_variable};",
+      "\tIF a AND b; /* Inner join - change as needed */",
+      "RUN;"
+    ],
+    "description": "Merge two datasets by key"
+  },
+  "DATA Step DO Loop": {
+    "prefix": "datado",
+    "body": [
+      "DATA ${1:output_dataset};",
+      "\tDO ${2:i} = ${3:1} TO ${4:10};",
+      "\t\t$0",
+      "\t\tOUTPUT;",
+      "\tEND;",
+      "RUN;"
+    ],
+    "description": "DATA step with DO loop"
+  },
+  "DATA Step Array": {
+    "prefix": "dataarray",
+    "body": [
+      "DATA ${1:output_dataset};",
+      "\tSET ${2:input_dataset};",
+      "\tARRAY ${3:arr}{*} ${4:var1-var10};",
+      "\t",
+      "\tDO i = 1 TO DIM(${3:arr});",
+      "\t\t${3:arr}{i} = ${5:expression};",
+      "\tEND;",
+      "\t",
+      "\tDROP i;",
+      "RUN;"
+    ],
+    "description": "DATA step with array processing"
+  },
+  "DATA Step Transpose Long to Wide": {
+    "prefix": "datatranswide",
+    "body": [
+      "PROC TRANSPOSE DATA=${1:input_dataset} OUT=${2:output_dataset} PREFIX=${3:var_};",
+      "\tBY ${4:id_variable};",
+      "\tID ${5:pivot_variable};",
+      "\tVAR ${6:value_variable};",
+      "RUN;"
+    ],
+    "description": "Transpose data from long to wide format"
+  },
+  "DATA Step Transpose Wide to Long": {
+    "prefix": "datatranslong",
+    "body": [
+      "PROC TRANSPOSE DATA=${1:input_dataset} OUT=${2:output_dataset}(RENAME=(COL1=${4:value_var}));",
+      "\tBY ${3:id_variable};",
+      "\tVAR ${5:var1 var2 var3};",
+      "RUN;"
+    ],
+    "description": "Transpose data from wide to long format"
+  },
+  "PROC SQL Basic": {
+    "prefix": "procsql",
+    "body": [
+      "PROC SQL;",
+      "\tCREATE TABLE ${1:output_dataset} AS",
+      "\tSELECT ${2:*}",
+      "\tFROM ${3:input_dataset}",
+      "\tWHERE ${4:condition}",
+      "\tORDER BY ${5:variable};",
+      "QUIT;"
+    ],
+    "description": "Basic PROC SQL query"
+  },
+  "PROC SQL Join": {
+    "prefix": "procsqljoin",
+    "body": [
+      "PROC SQL;",
+      "\tCREATE TABLE ${1:output_dataset} AS",
+      "\tSELECT a.*, b.${2:columns}",
+      "\tFROM ${3:dataset1} AS a",
+      "\t${4|LEFT JOIN,RIGHT JOIN,INNER JOIN,FULL JOIN|} ${5:dataset2} AS b",
+      "\t\tON a.${6:key} = b.${6:key}",
+      "\tORDER BY ${7:variable};",
+      "QUIT;"
+    ],
+    "description": "PROC SQL with JOIN"
+  },
+  "PROC SQL Summary": {
+    "prefix": "procsqlsummary",
+    "body": [
+      "PROC SQL;",
+      "\tCREATE TABLE ${1:output_dataset} AS",
+      "\tSELECT ${2:group_var},",
+      "\t       COUNT(*) AS n,",
+      "\t       MEAN(${3:numeric_var}) AS mean_${3:numeric_var},",
+      "\t       STD(${3:numeric_var}) AS std_${3:numeric_var},",
+      "\t       MIN(${3:numeric_var}) AS min_${3:numeric_var},",
+      "\t       MAX(${3:numeric_var}) AS max_${3:numeric_var}",
+      "\tFROM ${4:input_dataset}",
+      "\tGROUP BY ${2:group_var}",
+      "\tORDER BY ${2:group_var};",
+      "QUIT;"
+    ],
+    "description": "PROC SQL with summary statistics by group"
+  },
+  "PROC MEANS": {
+    "prefix": "procmeans",
+    "body": [
+      "PROC MEANS DATA=${1:dataset} N MEAN STD MIN MAX MEDIAN Q1 Q3;",
+      "\tCLASS ${2:categorical_var};",
+      "\tVAR ${3:numeric_vars};",
+      "\tOUTPUT OUT=${4:output_stats}",
+      "\t\tN= MEAN= STD= MIN= MAX= / AUTONAME;",
+      "RUN;"
+    ],
+    "description": "PROC MEANS with common statistics"
+  },
+  "PROC FREQ": {
+    "prefix": "procfreq",
+    "body": [
+      "PROC FREQ DATA=${1:dataset};",
+      "\tTABLES ${2:var1}*${3:var2} / ${4|CHISQ MEASURES,NOCOL NOROW NOPERCENT,LIST MISSING|};",
+      "\tODS OUTPUT CrossTabFreqs=freq_output;",
+      "RUN;"
+    ],
+    "description": "PROC FREQ for frequency tables"
+  },
+  "PROC SORT": {
+    "prefix": "procsort",
+    "body": [
+      "PROC SORT DATA=${1:dataset} ${2:OUT=${3:sorted_dataset}};",
+      "\tBY ${4:DESCENDING }${5:variable};",
+      "RUN;"
+    ],
+    "description": "PROC SORT to sort dataset"
+  },
+  "PROC SORT NODUPKEY": {
+    "prefix": "procsortnodup",
+    "body": [
+      "PROC SORT DATA=${1:dataset} OUT=${2:unique_dataset} NODUPKEY;",
+      "\tBY ${3:key_variables};",
+      "RUN;"
+    ],
+    "description": "PROC SORT to remove duplicates"
+  },
+  "PROC REG": {
+    "prefix": "procreg",
+    "body": [
+      "PROC REG DATA=${1:dataset};",
+      "\tMODEL ${2:dependent} = ${3:independent_vars} / VIF TOL CLB;",
+      "\tOUTPUT OUT=${4:reg_output} P=predicted R=residual STUDENT=studentized;",
+      "\tPLOT ${2:dependent}*${3:independent_vars};",
+      "RUN;",
+      "QUIT;"
+    ],
+    "description": "PROC REG for linear regression"
+  },
+  "PROC LOGISTIC": {
+    "prefix": "proclogistic",
+    "body": [
+      "PROC LOGISTIC DATA=${1:dataset} DESCENDING;",
+      "\tCLASS ${2:categorical_vars} / PARAM=REF;",
+      "\tMODEL ${3:outcome} = ${4:predictors} / SELECTION=STEPWISE SLENTRY=0.05 SLSTAY=0.05;",
+      "\tODDSRATIO;",
+      "\tOUTPUT OUT=${5:logistic_output} P=predicted;",
+      "RUN;"
+    ],
+    "description": "PROC LOGISTIC for logistic regression"
+  },
+  "PROC TTEST": {
+    "prefix": "procttest",
+    "body": [
+      "PROC TTEST DATA=${1:dataset};",
+      "\tCLASS ${2:group_var};",
+      "\tVAR ${3:numeric_vars};",
+      "RUN;"
+    ],
+    "description": "PROC TTEST for t-tests"
+  },
+  "PROC UNIVARIATE": {
+    "prefix": "procunivariate",
+    "body": [
+      "PROC UNIVARIATE DATA=${1:dataset} NORMAL;",
+      "\tVAR ${2:numeric_vars};",
+      "\tHISTOGRAM ${2:numeric_vars} / NORMAL;",
+      "\tQQPLOT ${2:numeric_vars} / NORMAL;",
+      "\tINSET MEAN STD SKEWNESS KURTOSIS / POSITION=NE;",
+      "RUN;"
+    ],
+    "description": "PROC UNIVARIATE for distribution analysis"
+  },
+  "PROC CORR": {
+    "prefix": "proccorr",
+    "body": [
+      "PROC CORR DATA=${1:dataset} PEARSON SPEARMAN;",
+      "\tVAR ${2:numeric_vars};",
+      "\tWITH ${3:other_vars};",
+      "RUN;"
+    ],
+    "description": "PROC CORR for correlation analysis"
+  },
+  "PROC SGPLOT Scatter": {
+    "prefix": "procsgplotscatter",
+    "body": [
+      "PROC SGPLOT DATA=${1:dataset};",
+      "\tSCATTER X=${2:x_var} Y=${3:y_var} / GROUP=${4:group_var}",
+      "\t\tMARKERATTRS=(SYMBOL=CircleFilled SIZE=8);",
+      "\tREG X=${2:x_var} Y=${3:y_var} / NOMARKERS CLM CLI;",
+      "\tXAXIS LABEL=\"${5:X Label}\";",
+      "\tYAXIS LABEL=\"${6:Y Label}\";",
+      "\tTITLE \"${7:Chart Title}\";",
+      "RUN;"
+    ],
+    "description": "PROC SGPLOT scatter plot with regression"
+  },
+  "PROC SGPLOT Bar": {
+    "prefix": "procsgplotbar",
+    "body": [
+      "PROC SGPLOT DATA=${1:dataset};",
+      "\tVBAR ${2:category_var} / RESPONSE=${3:numeric_var}",
+      "\t\tSTAT=${4|MEAN,SUM,FREQ|}",
+      "\t\tGROUP=${5:group_var}",
+      "\t\tGROUPDISPLAY=CLUSTER;",
+      "\tXAXIS LABEL=\"${6:X Label}\";",
+      "\tYAXIS LABEL=\"${7:Y Label}\";",
+      "\tTITLE \"${8:Chart Title}\";",
+      "RUN;"
+    ],
+    "description": "PROC SGPLOT bar chart"
+  },
+  "PROC SGPLOT Histogram": {
+    "prefix": "procsgplothist",
+    "body": [
+      "PROC SGPLOT DATA=${1:dataset};",
+      "\tHISTOGRAM ${2:numeric_var} / NBINS=${3:20};",
+      "\tDENSITY ${2:numeric_var} / TYPE=NORMAL;",
+      "\tDENSITY ${2:numeric_var} / TYPE=KERNEL;",
+      "\tXAXIS LABEL=\"${4:X Label}\";",
+      "\tTITLE \"${5:Distribution of ${2:numeric_var}}\";",
+      "RUN;"
+    ],
+    "description": "PROC SGPLOT histogram with density curves"
+  },
+  "PROC SGPLOT Box": {
+    "prefix": "procsgplotbox",
+    "body": [
+      "PROC SGPLOT DATA=${1:dataset};",
+      "\tVBOX ${2:numeric_var} / CATEGORY=${3:category_var}",
+      "\t\tGROUP=${4:group_var};",
+      "\tXAXIS LABEL=\"${5:X Label}\";",
+      "\tYAXIS LABEL=\"${6:Y Label}\";",
+      "\tTITLE \"${7:Chart Title}\";",
+      "RUN;"
+    ],
+    "description": "PROC SGPLOT box plot"
+  },
+  "PROC IMPORT CSV": {
+    "prefix": "procimportcsv",
+    "body": [
+      "PROC IMPORT DATAFILE=\"${1:filepath.csv}\"",
+      "\tOUT=${2:output_dataset}",
+      "\tDBMS=CSV REPLACE;",
+      "\tGETNAMES=YES;",
+      "\tGUESSINGROWS=MAX;",
+      "RUN;"
+    ],
+    "description": "PROC IMPORT for CSV files"
+  },
+  "PROC IMPORT Excel": {
+    "prefix": "procimportxlsx",
+    "body": [
+      "PROC IMPORT DATAFILE=\"${1:filepath.xlsx}\"",
+      "\tOUT=${2:output_dataset}",
+      "\tDBMS=XLSX REPLACE;",
+      "\tSHEET=\"${3:Sheet1}\";",
+      "\tGETNAMES=YES;",
+      "RUN;"
+    ],
+    "description": "PROC IMPORT for Excel files"
+  },
+  "PROC EXPORT CSV": {
+    "prefix": "procexportcsv",
+    "body": [
+      "PROC EXPORT DATA=${1:dataset}",
+      "\tOUTFILE=\"${2:filepath.csv}\"",
+      "\tDBMS=CSV REPLACE;",
+      "RUN;"
+    ],
+    "description": "PROC EXPORT to CSV"
+  },
+  "PROC FORMAT": {
+    "prefix": "procformat",
+    "body": [
+      "PROC FORMAT;",
+      "\tVALUE ${1:format_name}",
+      "\t\t${2:1} = \"${3:Label 1}\"",
+      "\t\t${4:2} = \"${5:Label 2}\"",
+      "\t\tOTHER = \"Other\";",
+      "",
+      "\tVALUE \\$${6:char_format_name}",
+      "\t\t\"${7:A}\" = \"${8:Category A}\"",
+      "\t\t\"${9:B}\" = \"${10:Category B}\"",
+      "\t\tOTHER = \"Unknown\";",
+      "RUN;"
+    ],
+    "description": "PROC FORMAT for custom formats"
+  },
+  "PROC CONTENTS": {
+    "prefix": "proccontents",
+    "body": [
+      "PROC CONTENTS DATA=${1:dataset} VARNUM;",
+      "RUN;"
+    ],
+    "description": "PROC CONTENTS to view dataset structure"
+  },
+  "Macro Definition": {
+    "prefix": "macro",
+    "body": [
+      "%MACRO ${1:macro_name}(${2:param1=}, ${3:param2=});",
+      "\t",
+      "\t$0",
+      "\t",
+      "%MEND ${1:macro_name};",
+      "",
+      "/* Call the macro */",
+      "%${1:macro_name}(${2:param1}=value1, ${3:param2}=value2);"
+    ],
+    "description": "Define a SAS macro"
+  },
+  "Macro Variable LET": {
+    "prefix": "let",
+    "body": [
+      "%LET ${1:macro_var} = ${2:value};"
+    ],
+    "description": "Define macro variable with %LET"
+  },
+  "Macro IF THEN ELSE": {
+    "prefix": "macroif",
+    "body": [
+      "%IF &${1:macro_var} = ${2:value} %THEN %DO;",
+      "\t$0",
+      "%END;",
+      "%ELSE %DO;",
+      "\t",
+      "%END;"
+    ],
+    "description": "Macro IF-THEN-ELSE block"
+  },
+  "Macro DO Loop": {
+    "prefix": "macrodo",
+    "body": [
+      "%DO ${1:i} = ${2:1} %TO ${3:10};",
+      "\t$0",
+      "%END;"
+    ],
+    "description": "Macro DO loop"
+  },
+  "Macro SYSFUNC": {
+    "prefix": "sysfunc",
+    "body": [
+      "%SYSFUNC(${1:function}(${2:arguments}))"
+    ],
+    "description": "%SYSFUNC to call DATA step functions in macro"
+  },
+  "ODS Output to PDF": {
+    "prefix": "odspdf",
+    "body": [
+      "ODS PDF FILE=\"${1:output.pdf}\" STYLE=JOURNAL;",
+      "",
+      "$0",
+      "",
+      "ODS PDF CLOSE;"
+    ],
+    "description": "ODS output to PDF"
+  },
+  "ODS Output to Excel": {
+    "prefix": "odsexcel",
+    "body": [
+      "ODS EXCEL FILE=\"${1:output.xlsx}\" STYLE=HTMLBLUE;",
+      "ODS EXCEL OPTIONS(SHEET_NAME=\"${2:Sheet1}\");",
+      "",
+      "$0",
+      "",
+      "ODS EXCEL CLOSE;"
+    ],
+    "description": "ODS output to Excel"
+  },
+  "ODS Output to HTML": {
+    "prefix": "odshtml",
+    "body": [
+      "ODS HTML FILE=\"${1:output.html}\" STYLE=HTMLBlue;",
+      "",
+      "$0",
+      "",
+      "ODS HTML CLOSE;"
+    ],
+    "description": "ODS output to HTML"
+  },
+  "LIBNAME Statement": {
+    "prefix": "libname",
+    "body": [
+      "LIBNAME ${1:libref} \"${2:/path/to/folder}\";"
+    ],
+    "description": "LIBNAME statement to define library"
+  },
+  "LIBNAME Excel": {
+    "prefix": "libnameexcel",
+    "body": [
+      "LIBNAME ${1:libref} XLSX \"${2:/path/to/file.xlsx}\";"
+    ],
+    "description": "LIBNAME for Excel file"
+  },
+  "FILENAME Statement": {
+    "prefix": "filename",
+    "body": [
+      "FILENAME ${1:fileref} \"${2:/path/to/file}\";"
+    ],
+    "description": "FILENAME statement"
+  },
+  "Comment Block": {
+    "prefix": "comment",
+    "body": [
+      "/***************************************************",
+      " * ${1:Description}",
+      " * Author: ${2:Your Name}",
+      " * Date: ${3:$CURRENT_DATE}",
+      " ***************************************************/"
+    ],
+    "description": "Comment block header"
+  },
+  "Survival Analysis Template": {
+    "prefix": "survival",
+    "body": [
+      "/* Kaplan-Meier Survival Analysis */",
+      "PROC LIFETEST DATA=${1:dataset} PLOTS=(S) NOTABLE;",
+      "\tTIME ${2:time_var}*${3:censor_var}(${4:0});",
+      "\tSTRATA ${5:group_var};",
+      "RUN;",
+      "",
+      "/* Cox Proportional Hazards Model */",
+      "PROC PHREG DATA=${1:dataset};",
+      "\tCLASS ${6:categorical_vars} / PARAM=REF;",
+      "\tMODEL ${2:time_var}*${3:censor_var}(${4:0}) = ${7:predictors} / RL;",
+      "\tHAZARDRATIO ${7:predictors};",
+      "RUN;"
+    ],
+    "description": "Complete survival analysis template"
+  },
+  "Propensity Score Matching": {
+    "prefix": "psm",
+    "body": [
+      "/* Step 1: Estimate propensity scores */",
+      "PROC LOGISTIC DATA=${1:dataset} DESCENDING;",
+      "\tCLASS ${2:categorical_confounders};",
+      "\tMODEL ${3:treatment} = ${4:confounders};",
+      "\tOUTPUT OUT=ps_scores PREDICTED=ps;",
+      "RUN;",
+      "",
+      "/* Step 2: Match on propensity score */",
+      "PROC PSMATCH DATA=ps_scores REGION=CS;",
+      "\tCLASS ${3:treatment};",
+      "\tPSMODEL ${3:treatment} = ${4:confounders};",
+      "\tMATCH METHOD=GREEDY(K=1) CALIPER=0.2;",
+      "\tOUTPUT OUT=matched_data MATCHID=_MatchID;",
+      "RUN;",
+      "",
+      "/* Step 3: Analyze matched data */",
+      "PROC TTEST DATA=matched_data;",
+      "\tCLASS ${3:treatment};",
+      "\tVAR ${5:outcome};",
+      "RUN;"
+    ],
+    "description": "Propensity score matching analysis"
+  }
+}

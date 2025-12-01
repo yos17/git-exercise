@@ -7,6 +7,7 @@ import { MacroVarsProvider } from './views/macroVarsProvider';
 import { DatasetViewerPanel } from './views/datasetViewer';
 import { SASDebugConfigProvider } from './debugger/debugConfigProvider';
 import { OutputManager } from './utils/outputManager';
+import { SASCompletionProvider, SASSignatureHelpProvider, SASHoverProvider } from './language/sasCompletionProvider';
 
 let connectionManager: SASConnectionManager;
 let aiAssistant: AIAssistant;
@@ -21,6 +22,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     connectionManager = new SASConnectionManager(outputManager);
     aiAssistant = new AIAssistant(context);
     dataAnonymizer = new DataAnonymizer(connectionManager);
+
+    // Register language features for intelligent code completion
+    const sasSelector: vscode.DocumentSelector = { language: 'sas', scheme: '*' };
+
+    // Code completion (IntelliSense)
+    context.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider(
+            sasSelector,
+            new SASCompletionProvider(),
+            '%', '.', ' '  // Trigger characters
+        )
+    );
+
+    // Signature help (function parameters)
+    context.subscriptions.push(
+        vscode.languages.registerSignatureHelpProvider(
+            sasSelector,
+            new SASSignatureHelpProvider(),
+            '(', ','
+        )
+    );
+
+    // Hover documentation
+    context.subscriptions.push(
+        vscode.languages.registerHoverProvider(sasSelector, new SASHoverProvider())
+    );
 
     // Register tree data providers
     const libraryProvider = new LibraryTreeProvider(connectionManager);
